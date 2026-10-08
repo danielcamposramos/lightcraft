@@ -570,9 +570,32 @@ fn unusable_icc_falls_back_to_srgb_with_flag() {
     assert!((d.image.get(0, 0)[0] - srgb_to_linear(128.0 / 255.0)).abs() < 1e-6);
 }
 
-/// Splice an MPF APP2 segment right after SOI and append `preview` after the primary image.
-fn with_mpf_preview(primary: &[u8], preview: &[u8]) -> Vec<u8> {
-    // MPF segment payload: "MPF\0" + TIFF (LE) with one IFD holding 3 entries + 2 MP entries.
+// Individual Image Attributes (CIPA DC-007-2009 §5.2.3.3.1, Figure 8): flags in bits 31–29, the
+// MP Type Code (Table 4) in bits 23–0.
+const MP_PARENT: u32 = 0x8000_0000;
+const MP_CHILD: u32 = 0x4000_0000;
+const MP_REPRESENTATIVE: u32 = 0x2000_0000;
+const MP_PRIMARY: u32 = 0x03_0000;
+const MP_LARGE_THUMBNAIL_VGA: u32 = 0x01_0001;
+const MP_LARGE_THUMBNAIL_FULL_HD: u32 = 0x01_0002;
+const MP_PANORAMA: u32 = 0x02_0001;
+const MP_DISPARITY: u32 = 0x02_0002;
+const MP_MULTI_ANGLE: u32 = 0x02_0003;
+const MP_UNDEFINED: u32 = 0x00_0000;
+
+/// One Individual Image of an MP file: its JPEG, Individual Image Attribute and Dependent Image 1
+/// and 2 Entry Numbers.
+struct MpImage<'a> {
+    jpeg: &'a [u8],
+    attr: u32,
+    deps: [u16; 2],
+}
+
+/// Splice an MPF APP2 segment (MP Index IFD with one MP Entry per image) right after the first
+/// image's SOI and append the other images after it.
+fn with_mpf(images: &[MpImage]) -> Vec<u8> {
+    // MPF segment payload: "MPF\0" + TIFF (LE) with one IFD holding 3 entries + the MP entries.
+    let n = images.len();
     let mut t = b"II*\0".to_vec();
     t.extend_from_slice(&8u32.to_le_bytes());
     t.extend_from_slice(&3u16.to_le_bytes());
@@ -585,31 +608,46 @@ fn with_mpf_preview(primary: &[u8], preview: &[u8]) -> Vec<u8> {
         t.extend_from_slice(&val);
     };
     push(&mut t, 0xB000, 7, 4, *b"0100");
-    push(&mut t, 0xB001, 4, 1, 2u32.to_le_bytes());
-    push(&mut t, 0xB002, 7, 32, entries_off.to_le_bytes());
+    push(&mut t, 0xB001, 4, 1, (n as u32).to_le_bytes());
+    push(&mut t, 0xB002, 7, 16 * n as u32, entries_off.to_le_bytes());
     t.extend_from_slice(&0u32.to_le_bytes());
     assert_eq!(t.len(), ifd_end);
-    let seg_len = 2 + 4 + t.len() + 32;
+    let seg_len = 2 + 4 + t.len() + 16 * n;
     let mpf_header_pos = 2 + 4 + 4; // SOI, FFE2+len, "MPF\0"
-    let primary_len = primary.len() + 2 + seg_len;
-    let preview_off = (primary_len - mpf_header_pos) as u32;
-    let mut e = Vec::new();
-    for (size, off) in [(primary_len as u32, 0u32), (preview.len() as u32, preview_off)] {
-        e.extend_from_slice(&0u32.to_le_bytes());
-        e.extend_from_slice(&size.to_le_bytes());
-        e.extend_from_slice(&off.to_le_bytes());
-        e.extend_from_slice(&[0, 0, 0, 0]);
+    let first = images[0].jpeg;
+    let first_len = first.len() + 2 + seg_len;
+    let mut next = first_len;
+    for (i, img) in images.iter().enumerate() {
+        // Data offsets are counted from the MP header; the first image's is 0 (§5.2.3.3.3).
+        let (size, off) = if i == 0 { (first_len, 0) } else { (img.jpeg.len(), next - mpf_header_pos) };
+        if i > 0 {
+            next += img.jpeg.len();
+        }
+        t.extend_from_slice(&img.attr.to_le_bytes());
+        t.extend_from_slice(&(size as u32).to_le_bytes());
+        t.extend_from_slice(&(off as u32).to_le_bytes());
+        t.extend_from_slice(&img.deps[0].to_le_bytes());
+        t.extend_from_slice(&img.deps[1].to_le_bytes());
     }
-    t.extend_from_slice(&e);
-    let mut out = primary[..2].to_vec();
+    let mut out = first[..2].to_vec();
     out.extend_from_slice(&[0xFF, 0xE2]);
     out.extend_from_slice(&(seg_len as u16).to_be_bytes());
     out.extend_from_slice(b"MPF\0");
     out.extend_from_slice(&t);
-    out.extend_from_slice(&primary[2..]);
-    assert_eq!(out.len(), primary_len);
-    out.extend_from_slice(preview);
+    out.extend_from_slice(&first[2..]);
+    assert_eq!(out.len(), first_len);
+    for img in &images[1..] {
+        out.extend_from_slice(img.jpeg);
+    }
     out
+}
+
+/// A Baseline MP file (CIPA DC-007-2009 §6.1): the primary image and its Class 1 Large Thumbnail.
+fn with_mpf_preview(primary: &[u8], preview: &[u8]) -> Vec<u8> {
+    with_mpf(&[
+        MpImage { jpeg: primary, attr: MP_PARENT | MP_REPRESENTATIVE | MP_PRIMARY, deps: [2, 0] },
+        MpImage { jpeg: preview, attr: MP_CHILD | MP_LARGE_THUMBNAIL_VGA, deps: [0, 0] },
+    ])
 }
 
 #[test]
@@ -625,6 +663,71 @@ fn thumbnail_from_mpf_preview() {
     assert_eq!(t.source, ThumbnailSource::MpfPreview);
     assert_eq!((t.image.width, t.image.height), (256, 192));
     assert!(t.image.get(5, 5)[1] > 150);
+}
+
+#[test]
+fn thumbnail_from_mpf_large_thumbnail_without_dependency_links() {
+    // Dependent Image Entry Numbers left at 0: with no other image in the file, the Large
+    // Thumbnail can only be the primary image's.
+    let main = Rgba8::filled(2560, 1440, [200, 30, 30, 255]);
+    let prev = Rgba8::filled(1920, 1080, [30, 200, 30, 255]);
+    let enc = |i: &Rgba8| encode_jpeg(&EncodeImage::rgba8(i), 80, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let (main, prev) = (enc(&main), enc(&prev));
+    let bytes = with_mpf(&[
+        MpImage { jpeg: &main, attr: MP_REPRESENTATIVE | MP_PRIMARY, deps: [0, 0] },
+        MpImage { jpeg: &prev, attr: MP_LARGE_THUMBNAIL_FULL_HD, deps: [0, 0] },
+    ]);
+    let t = decode_thumbnail(&bytes, 256).unwrap();
+    assert_eq!(t.source, ThumbnailSource::MpfPreview);
+    assert!(t.image.get(5, 5)[1] > 150);
+}
+
+#[test]
+fn thumbnail_never_shows_another_mpo_view() {
+    // CIPA DC-007-2009 Table 4: only a Large Thumbnail is a preview. The second image of a stereo
+    // MPO (disparity) is the other eye; multi-angle and panorama images are other views; an
+    // undefined image is unknown. The thumbnail is the first image, scaled.
+    let first = Rgba8::filled(640, 480, [200, 30, 30, 255]);
+    let other = Rgba8::filled(640, 480, [30, 200, 30, 255]);
+    let enc = |i: &Rgba8| encode_jpeg(&EncodeImage::rgba8(i), 80, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let (first, other) = (enc(&first), enc(&other));
+    for mp_type in [MP_DISPARITY, MP_MULTI_ANGLE, MP_PANORAMA, MP_UNDEFINED] {
+        let bytes = with_mpf(&[
+            MpImage { jpeg: &first, attr: MP_REPRESENTATIVE | mp_type, deps: [0, 0] },
+            MpImage { jpeg: &other, attr: mp_type, deps: [0, 0] },
+        ]);
+        let t = decode_thumbnail(&bytes, 256).unwrap();
+        assert_eq!(t.source, ThumbnailSource::Scaled, "MP Type {mp_type:06X}");
+        assert!(t.image.get(5, 5)[0] > 150, "MP Type {mp_type:06X}: the first image, got {:?}", t.image.get(5, 5));
+    }
+}
+
+#[test]
+fn thumbnail_takes_the_first_views_own_large_thumbnail() {
+    // A stereo MPO with a Large Thumbnail for each eye (§6.2.3): each belongs to the image that
+    // lists it as a Dependent Image. Entry 3 is the right eye's and is listed first in the file.
+    let left = Rgba8::filled(1280, 960, [200, 30, 30, 255]);
+    let right = Rgba8::filled(1280, 960, [30, 200, 30, 255]);
+    let right_thumb = Rgba8::filled(640, 480, [30, 30, 200, 255]);
+    let left_thumb = Rgba8::filled(640, 480, [200, 200, 30, 255]);
+    let enc = |i: &Rgba8| encode_jpeg(&EncodeImage::rgba8(i), 80, ChromaSubsampling::S420, &EncodeMeta::default()).unwrap();
+    let (left, right, right_thumb, left_thumb) = (enc(&left), enc(&right), enc(&right_thumb), enc(&left_thumb));
+    let stereo = |left_deps: [u16; 2], right_deps: [u16; 2]| {
+        with_mpf(&[
+            MpImage { jpeg: &left, attr: MP_PARENT | MP_REPRESENTATIVE | MP_DISPARITY, deps: left_deps },
+            MpImage { jpeg: &right, attr: MP_PARENT | MP_DISPARITY, deps: right_deps },
+            MpImage { jpeg: &right_thumb, attr: MP_CHILD | MP_LARGE_THUMBNAIL_VGA, deps: [0, 0] },
+            MpImage { jpeg: &left_thumb, attr: MP_CHILD | MP_LARGE_THUMBNAIL_VGA, deps: [0, 0] },
+        ])
+    };
+    let t = decode_thumbnail(&stereo([4, 0], [3, 0]), 256).unwrap();
+    assert_eq!(t.source, ThumbnailSource::MpfPreview);
+    let p = t.image.get(5, 5);
+    assert!(p[0] > 150 && p[1] > 150 && p[2] < 100, "the left eye's Large Thumbnail, got {p:?}");
+    // Without the links neither thumbnail can be told to belong to the left eye: scaled decode.
+    let t = decode_thumbnail(&stereo([0, 0], [0, 0]), 256).unwrap();
+    assert_eq!(t.source, ThumbnailSource::Scaled);
+    assert!(t.image.get(5, 5)[0] > 150 && t.image.get(5, 5)[1] < 100);
 }
 
 #[test]
