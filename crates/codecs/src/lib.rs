@@ -191,7 +191,8 @@ pub fn to_working(d: &Decoded) -> Rgb32f {
 pub enum ThumbnailSource {
     /// The JPEG thumbnail embedded in EXIF (IFD1).
     ExifThumbnail,
-    /// An MPF (CIPA DC-007) preview image embedded in a JPEG.
+    /// An MPF (CIPA DC-007) Large Thumbnail of the main image, embedded in a JPEG. Other MPF images
+    /// (the other views of a stereo, multi-angle or panorama MPO, undefined images) are never used.
     MpfPreview,
     /// A (DCT-)scaled decode of the main image.
     Scaled,
@@ -233,8 +234,9 @@ impl ThumbnailOptions {
     }
 }
 
-/// Fast thumbnail: an embedded JPEG preview (EXIF IFD1 thumbnail or MPF preview) at least `max_edge`
-/// on its long side if one exists, else a scaled decode. The result fits within `max_edge × max_edge`.
+/// Fast thumbnail: an embedded JPEG preview (EXIF IFD1 thumbnail or MPF Large Thumbnail) at least
+/// `max_edge` on its long side if one exists, else a scaled decode. The result fits within
+/// `max_edge × max_edge`.
 pub fn decode_thumbnail(bytes: &[u8], max_edge: u32) -> Result<Thumbnail> {
     decode_thumbnail_with(bytes, &ThumbnailOptions::new(max_edge))
 }
