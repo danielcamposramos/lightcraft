@@ -296,8 +296,8 @@ fn scaled_request(w: u32, h: u32, mw: u32, mh: u32) -> (u16, u16) {
     (tw as u16, th as u16)
 }
 
-/// Fast path: an embedded JPEG preview (EXIF IFD1 thumbnail, or the largest MPF preview) whose long
-/// edge is ≥ `max_edge`, decoded with DCT scaling and fitted.
+/// Fast path: an embedded JPEG preview (EXIF IFD1 thumbnail, or an MPF Large Thumbnail of the
+/// first image) whose long edge is ≥ `max_edge`, decoded with DCT scaling and fitted.
 pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> Option<Thumbnail> {
     let m = parse_markers(bytes)?;
     let summary = m.exif.as_deref().map(exif::summarize).unwrap_or_default();
@@ -306,11 +306,8 @@ pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> 
     if let (Some(ex), Some((o, l))) = (m.exif.as_deref(), summary.thumbnail) {
         candidates.push((&ex[o..o + l], ThumbnailSource::ExifThumbnail));
     }
-    for e in mpf_images(&m) {
-        if e.kind == MPF_GAIN_MAP {
-            continue;
-        }
-        if let Some(s) = bytes.get(e.offset..e.offset.saturating_add(e.len)) {
+    for (o, l) in mpf_large_thumbnails(&m) {
+        if let Some(s) = bytes.get(o..o.saturating_add(l)) {
             candidates.push((s, ThumbnailSource::MpfPreview));
         }
     }
@@ -376,6 +373,58 @@ pub(crate) fn mpf_images(m: &Markers) -> Vec<MpfEntry> {
         let (attr, size, off) = (rd(0), rd(4) as usize, rd(8) as usize);
         if size > 0 && off > 0 {
             out.push(MpfEntry { offset: base.saturating_add(off), len: size, kind: attr & 0x00FF_FFFF });
+        }
+    }
+    out
+}
+
+/// "Type Info" of the MP Type Large Thumbnail: bits 23–16 of an MP Entry's Individual Image
+/// Attribute (CIPA DC-007-2009 §5.2.3.3.1, Figure 9; Table 4: Class 1 010001.H, Class 2 010002.H).
+const MP_TYPE_LARGE_THUMBNAIL: u32 = 1;
+
+/// (file offset, length) of the MPF Large Thumbnails of the first Individual Image, the picture the
+/// file shows. CIPA DC-007-2009 Table 4: only a Large Thumbnail is a smaller copy of an image. A
+/// Multi-View image (panorama 020001.H, disparity 020002.H, multi-angle 020003.H) is another view of
+/// the scene, such as the other eye of a stereo MPO, and an Undefined image (000000.H) is something
+/// else; neither is a preview. A Large Thumbnail belongs to the image that lists it as a Dependent
+/// Image (§6.1.2.4.1, §6.2.3): when the first MP Entry names dependents only those count; when it
+/// names none, a Large Thumbnail is the first image's only if every other entry is a Large Thumbnail
+/// (or the first image's gain map).
+fn mpf_large_thumbnails(m: &Markers) -> Vec<(usize, usize)> {
+    let Some((base, data)) = &m.mpf else { return vec![] };
+    let Some(t) = exif::Tiff::new(data) else { return vec![] };
+    let Some(ifd) = t.first_ifd() else { return vec![] };
+    let Some((entries, _)) = t.ifd(ifd) else { return vec![] };
+    let Some(e) = entries.iter().find(|e| e.tag == 0xB002) else { return vec![] };
+    let Some(list) = t.bytes(e) else { return vec![] };
+    // MP Entry (§5.2.3.3, Figure 7) in the MP header's byte order: Individual Image Attribute, Size
+    // and Data Offset (LONG), then the Dependent Image 1 and 2 Entry Numbers (SHORT, counted from 1).
+    let le = data.starts_with(b"II");
+    let long = |r: &[u8; 16], o: usize| {
+        let a = [r[o], r[o + 1], r[o + 2], r[o + 3]];
+        if le { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
+    };
+    let short = |r: &[u8; 16], o: usize| {
+        let a = [r[o], r[o + 1]];
+        if le { u16::from_le_bytes(a) } else { u16::from_be_bytes(a) }
+    };
+    let large_thumbnail = |r: &[u8; 16]| (long(r, 0) >> 16) & 0xFF == MP_TYPE_LARGE_THUMBNAIL;
+    let records: Vec<&[u8; 16]> = list.as_chunks::<16>().0.iter().take(16).collect();
+    let Some(first) = records.first() else { return vec![] };
+    let dependents = [short(first, 12), short(first, 14)];
+    let linked = dependents.iter().any(|&n| n != 0);
+    // a gain map (of the first image) leaves the file a Baseline MP file
+    let only_thumbnails = records.iter().skip(1).all(|r| large_thumbnail(r) || long(r, 0) & 0xFF_FFFF == MPF_GAIN_MAP);
+    let mut out = Vec::new();
+    for (i, rec) in records.iter().enumerate().skip(1) {
+        let number = i as u16 + 1;
+        let of_first = if linked { dependents.contains(&number) } else { only_thumbnails };
+        if !large_thumbnail(rec) || !of_first {
+            continue;
+        }
+        let (size, off) = (long(rec, 4) as usize, long(rec, 8) as usize);
+        if size > 0 && off > 0 {
+            out.push((base.saturating_add(off), size));
         }
     }
     out
