@@ -2788,6 +2788,28 @@ mod tests {
         assert!(ids(&mut h, "notice:previewOnly:").is_empty());
     }
 
+    /// Issue #446: a stereo pair (an iPhone spatial photo) shows a "Spatial" pill in Info; other
+    /// photos show none.
+    #[test]
+    fn stereo_photo_shows_spatial_pill_in_info() {
+        let mut h = demo([1300.0, 900.0]);
+        let t = Duration::from_secs(10);
+        let vis = h.app.session.visible_cloned();
+        let (st, other) = (vis[0], vis[1]);
+        h.app.session.catalog.apply(lightcraft_catalog::Op::SetStereo { id: st, stereo: Some(true) }).unwrap();
+        let ids = |h: &mut Headless, filter: &str| -> Vec<String> {
+            let w = h.request("ui.widgets", json!({"filter": filter}), t);
+            w["result"].as_array().unwrap_or_else(|| panic!("{w}")).iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()
+        };
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [st.0]}}), t);
+        h.app.ui.right = crate::state::RightPanel::Info;
+        h.settle(SETTLE);
+        assert_eq!(ids(&mut h, "pill:stereo:"), vec!["pill:stereo:info".to_string()]);
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
+        h.settle(SETTLE);
+        assert!(ids(&mut h, "pill:stereo:").is_empty());
+    }
+
     #[test]
     fn crop_default_browsing_is_read_only_and_drag_is_one_edit() {
         let mut h = demo([1200.0, 800.0]);
