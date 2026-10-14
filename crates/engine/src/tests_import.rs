@@ -1941,6 +1941,48 @@ fn heic_exif_reaches_the_catalog_and_all_metadata() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// Issue #446: an iPhone spatial photo is a HEIC with a stereo (`ster`) entity group. The import
+/// probe finds it from the container and the photo records it; every other checked file records
+/// `Some(false)`. The name holds "heic" so `cargo xtask ci` also runs it with the HEIF decoder.
+#[test]
+fn stereo_heic_is_detected_at_import_and_other_files_are_not() {
+    use lightcraft_heif::testdata::{Spec, build};
+    let photo = |x: u32, y: u32| [((x * 5 + y * 11) % 200 + 30) as u16, 120, 140];
+    let stereo = build(&Spec { stereo: true, ..Spec::new(64, 32, &photo) });
+    let plain = build(&Spec::new(64, 32, &photo));
+    let pair = lightcraft_meta::stereo_pair(&stereo).expect("the builder writes a ster group");
+    // `pitm` (version 0): four bytes of version and flags, then the 16-bit primary item id
+    let at = stereo.windows(4).position(|w| w == b"pitm").unwrap() + 8;
+    let primary = u32::from(u16::from_be_bytes([stereo[at], stereo[at + 1]]));
+    assert_eq!(pair.left, primary, "{pair:?}");
+    assert_ne!(pair.right, primary, "{pair:?}");
+    assert_eq!(lightcraft_meta::stereo_pair(&plain), None);
+
+    let src = temp_dir("heic-stereo");
+    write_png(&src.join("flat.png"), 3);
+    let png = std::fs::read(src.join("flat.png")).unwrap();
+    assert_eq!(crate::files::probe_bytes("flat.png", &png).unwrap().stereo, Some(false));
+    if !lightcraft_codecs::Format::Heif.can_decode() {
+        let _ = std::fs::remove_dir_all(&src);
+        return; // probing and importing a HEIC need the decoder
+    }
+    // the second (right-eye) image doesn't change what the decoder shows
+    let d = lightcraft_codecs::decode(&stereo, lightcraft_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!((d.width, d.height), (64, 32));
+    assert_eq!(crate::files::probe_bytes("x.heic", &stereo).unwrap().stereo, Some(true));
+    assert_eq!(crate::files::probe_bytes("x.heic", &plain).unwrap().stereo, Some(false));
+    std::fs::write(src.join("spatial.heic"), &stereo).unwrap();
+    std::fs::write(src.join("plain.heic"), &plain).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 3, "{r}");
+    let by_name = |n: &str| s.catalog.photos().find(|p| p.file_name == n).map(|p| p.stereo);
+    assert_eq!(by_name("spatial.heic"), Some(Some(true)));
+    assert_eq!(by_name("plain.heic"), Some(Some(false)));
+    assert_eq!(by_name("flat.png"), Some(Some(false)));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Issue #705: Nikon (and most cameras) write `.JPG` and `.NEF`, and a user may rename to `.Jpg`.
 /// The folder scan, `library.browse` and the sidecar lookup match extensions in any letter
 /// case. (The file dialog's filters, the one place that was case-sensitive on Linux before
