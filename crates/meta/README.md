@@ -14,6 +14,7 @@ Photo metadata: EXIF, XMP (read + write), IPTC-IIM, and the containers that carr
 | `parse_iptc(&[u8]) -> Metadata` | IIM record 2: title (2:5), keywords (2:25), by-line (2:80), copyright (2:116), caption (2:120), date/time created (2:55/2:60). |
 | `extract(&[u8]) -> Metadata` | Everything for a whole file. Precedence: EXIF → IPTC fills gaps → XMP overrides user fields (rating, label, title, caption, artist, copyright, keywords, GPS) and fills the rest. |
 | `embeds_location(&[u8]) -> bool` | Whether a file carries GPS anywhere it can be read from (export's "remove location" check): for HEIF every Exif and XMP item, whichever image it describes, with unreadable items counted as a location; otherwise what `extract` reads. |
+| `stereo_pair(&[u8]) -> Option<StereoPair>` | The left-eye and right-eye item ids of a stereo HEIF / HEIC (an iPhone spatial photo), from the `grpl` box: the first `ster` entity group of exactly two entities, or `stem` group of exactly three (the third is the monoscopic image); `None` for anything else. Named `stereo` after the HEIF group: Apple calls a file "spatial" only when it also carries per-eye camera metadata, which isn't checked; the UI labels it Spatial because that's the users' term. |
 
 `Metadata` carries camera (make, model, serial, software), lens (make, model, serial, specification), capture
 (date-time with UTC offset and milliseconds, exposure time, f-number, ISO incl. extended ISO, focal length and
@@ -41,7 +42,7 @@ Parts 1–3 (packet, RDF serialisation, standard schemas, JPEG extended XMP), IP
 Metadata Standard, ITU-T T.81 (JPEG markers), ICC.1 (APP2 embedding), PNG Specification 3rd ed. (`eXIf`,
 `iTXt`), the WebP RIFF container specification, Adobe Photoshop File Format Specification (image resource
 blocks), ISO/IEC 14496-12 (ISO base media file format: boxes, `meta`, `iinf`, `iloc`, `iref`, `idat`) and
-ISO/IEC 23008-12 (HEIF: items, `pitm`, `cdsc` and `dimg` references, the `Exif` item of annex A). XML parsing:
+ISO/IEC 23008-12 (HEIF: items, `pitm`, `cdsc` and `dimg` references, the `Exif` item of annex A, `grpl` entity groups). XML parsing:
 `quick-xml` (MIT). No third-party metadata reader was consulted (heic-rs's metadata test file, MIT / Apache-2.0,
 was glanced at only while looking for sample files; its reader was not read). For a HEIF test, the code of avif-serialize
 (BSD-3-Clause, the AVIF writer behind our AVIF export) was read only to learn how it lays out the `Exif` item it

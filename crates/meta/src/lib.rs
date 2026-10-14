@@ -7,6 +7,7 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
+//! - [`stereo_pair`] — the left and right images of a stereo (spatial) HEIC.
 //! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, Canon CR3, HEIF/HEIC/AVIF).
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
 #![forbid(unsafe_code)]
@@ -29,6 +30,7 @@ pub use datetime::DateTime;
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, write_exif};
 pub use focus::FocusPoint;
 pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
+pub use heif::StereoPair;
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
 pub use tags::{TagRow, file_tag_rows, tag_rows};
@@ -311,6 +313,18 @@ pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
 /// as a location; for other files, what [`extract`] reads.
 pub fn embeds_location(bytes: &[u8]) -> bool {
     heif::embeds_location(bytes).unwrap_or_else(|| extract(bytes).gps.is_some())
+}
+
+/// The left-eye and right-eye images of a stereo HEIF / HEIC file (an iPhone spatial photo), by
+/// item id: the first `ster` entity group of exactly two entities, or `stem` group of exactly
+/// three (the third is the monoscopic fallback). Read from the container alone, nothing is
+/// decoded. `None` for anything else: not HEIF, no such group, or malformed boxes.
+///
+/// The data is called `stereo` (the HEIF `ster`/`stem` entity group). Apple calls a file
+/// "spatial" only when it also carries per-eye camera metadata, which we don't check; the UI
+/// labels it Spatial because that's the users' term.
+pub fn stereo_pair(bytes: &[u8]) -> Option<StereoPair> {
+    heif::stereo_pair(bytes)
 }
 
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
