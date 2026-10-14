@@ -1747,6 +1747,9 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// Whether the file holds a stereo pair (iPhone spatial HEIC): `Some(false)` for every format
+    /// that was checked, `None` when the probe didn't look (a preview-only raw).
+    pub stereo: Option<bool>,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;
