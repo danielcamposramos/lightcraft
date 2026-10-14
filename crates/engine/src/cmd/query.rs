@@ -28,6 +28,8 @@ pub fn photo_summary(p: &Photo) -> Value {
         "copyName": p.copy_name,
         // an undecodable raw variant, shown and edited from its embedded JPEG: why
         "previewOnly": p.preview_only,
+        // a stereo pair, an iPhone spatial photo; null = not checked yet
+        "stereo": p.stereo,
     })
 }
 

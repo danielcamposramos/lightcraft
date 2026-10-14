@@ -848,6 +848,18 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
                     ui.label(egui::RichText::new(p.format.to_uppercase()).size(10.5).color(t.text_label));
                 });
+                if p.stereo == Some(true) {
+                    let r = egui::Frame::NONE
+                        .fill(t.chrome)
+                        .corner_radius(3.0)
+                        .inner_margin(egui::Margin::symmetric(5, 1))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(crate::i18n::tr("Spatial")).size(10.5).color(t.text_label));
+                        })
+                        .response
+                        .on_hover_text(crate::i18n::tr("A stereo pair: left-eye and right-eye images (an iPhone spatial photo)"));
+                    register(ui.ctx(), "pill:stereo:info".to_string(), r.rect);
+                }
             });
         });
         let rows = [
