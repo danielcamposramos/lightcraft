@@ -137,6 +137,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
+    // only HEIF carries the group; any other format is checked (and answered) at once
+    let stereo = Some(lightcraft_meta::stereo_pair(bytes).is_some());
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
@@ -182,6 +184,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
             content_hash,
             xmp: lightcraft_meta::embedded(bytes).xmp,
             preview_only: None,
+            stereo,
         });
     }
     let fmt = lightcraft_codecs::sniff(bytes).ok_or("unrecognized file format")?;
@@ -215,6 +218,7 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
         embedded_lens: None,
         xmp: None,
         preview_only: None,
+        stereo,
     })
 }
 
