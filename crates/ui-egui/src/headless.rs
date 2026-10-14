@@ -2788,10 +2788,10 @@ mod tests {
         assert!(ids(&mut h, "notice:previewOnly:").is_empty());
     }
 
-    /// Issue #446: a stereo pair (an iPhone spatial photo) shows a "Spatial" pill in Info; other
-    /// photos show none.
+    /// Issue #446: a stereo pair (a spatial photo) shows a cube badge on its grid cell's
+    /// badge bar and a "Spatial" pill in Info; other photos show neither.
     #[test]
-    fn stereo_photo_shows_spatial_pill_in_info() {
+    fn stereo_photo_shows_spatial_badge_in_grid_and_pill_in_info() {
         let mut h = demo([1300.0, 900.0]);
         let t = Duration::from_secs(10);
         let vis = h.app.session.visible_cloned();
@@ -2801,6 +2801,12 @@ mod tests {
             let w = h.request("ui.widgets", json!({"filter": filter}), t);
             w["result"].as_array().unwrap_or_else(|| panic!("{w}")).iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()
         };
+        // the grid: the badge bar of a selected cell shows the cube on the stereo photo only
+        h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [st.0, other.0]}}), t);
+        h.settle(SETTLE);
+        assert_eq!(ids(&mut h, "badge:stereo:"), vec![format!("badge:stereo:{}", st.0)]);
+        // Info: the pill, on the stereo photo only
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [st.0]}}), t);
         h.app.ui.right = crate::state::RightPanel::Info;
         h.settle(SETTLE);
