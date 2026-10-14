@@ -595,6 +595,41 @@ fn set_as_shot_wb_is_undoable_journaled_and_checked() {
     assert_eq!(c.photo(a).unwrap().as_shot_wb, Some((6500.0, 0.0)));
 }
 
+/// Detecting a stereo pair stores the result; the inverse (through the journal's JSON) takes it back to "not checked".
+#[test]
+fn set_stereo_is_undoable_journaled_and_checked() {
+    let mut c = Catalog::default();
+    let a = c.alloc_photo_id();
+    let p = Photo::new(a, Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 4000, 3000, "2026-10-06T00:00:00");
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    assert_eq!(c.photo(a).unwrap().stereo, None);
+    let op = Op::SetStereo { id: a, stereo: Some(true) };
+    let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+    let inv = c.apply(op).unwrap();
+    assert_eq!(c.photo(a).unwrap().stereo, Some(true));
+    let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
+    c.apply(inv).unwrap();
+    assert_eq!(c.photo(a).unwrap().stereo, None);
+    assert!(c.apply(Op::SetStereo { id: PhotoId(999), stereo: Some(false) }).is_err());
+    assert_eq!(c.photo(a).unwrap().stereo, None);
+}
+
+/// `stereo` is left out of the JSON while unknown, and a photo written before the field existed reads as `None`.
+#[test]
+fn photo_stereo_serde_is_backward_compatible() {
+    let a = PhotoId(1);
+    let mut p = Photo::new(a, Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 4000, 3000, "2026-10-06T00:00:00");
+    let mut v = serde_json::to_value(&p).unwrap();
+    assert!(v.get("stereo").is_none());
+    let old: Photo = serde_json::from_value(v.clone()).unwrap();
+    assert_eq!(old.stereo, None);
+    p.stereo = Some(false);
+    v = serde_json::to_value(&p).unwrap();
+    assert_eq!(v.get("stereo"), Some(&serde_json::json!(false)));
+    let back: Photo = serde_json::from_value(v).unwrap();
+    assert_eq!(back.stereo, Some(false));
+}
+
 /// A saved smart album whose rules no longer check (the album a rule tests was deleted) is found,
 /// with its problems; a good one has none; an old album operator is read as it was meant.
 #[test]
