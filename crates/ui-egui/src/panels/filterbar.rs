@@ -251,6 +251,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .map(|(l, v, e)| (l.to_string(), json!({"edited": v}), f.edited == e))
             .collect(),
     );
+    let stereo_label = match f.stereo {
+        None => "Spatial or not",
+        Some(true) => "Spatial",
+        Some(false) => "Not spatial",
+    };
+    picker(
+        app,
+        ui,
+        "stereo",
+        stereo_label,
+        f.stereo.is_some(),
+        [("Spatial or not", Value::Null, None), ("Spatial", json!(true), Some(true)), ("Not spatial", json!(false), Some(false))]
+            .into_iter()
+            .map(|(l, v, e)| (l.to_string(), json!({"stereo": v}), f.stereo == e))
+            .collect(),
+    );
 
     // metadata pickers
     let ui: &mut egui::Ui = if two_rows { &mut row2 } else { &mut row1 };
