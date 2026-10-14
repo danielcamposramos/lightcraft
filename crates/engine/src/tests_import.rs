@@ -2053,7 +2053,7 @@ fn heic_exif_reaches_the_catalog_and_all_metadata() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// Issue #446: an iPhone spatial photo is a HEIC with a stereo (`ster`) entity group. The import
+/// Issue #446: a phone's spatial photo is a HEIC with a stereo (`ster`) entity group. The import
 /// probe finds it from the container and the photo records it; every other checked file records
 /// `Some(false)`. The name holds "heic" so `cargo xtask ci` also runs it with the HEIF decoder.
 #[test]
