@@ -17,6 +17,8 @@
 //!   map's inputs), else those tied to no image (they describe the file). An item tied only to
 //!   other images (a thumbnail, a depth map, another photo of a collection) is not this photo's.
 //! - [`embeds_location`] looks at every EXIF and XMP item instead, for export's "remove location".
+//! - [`stereo_pair`] reads the `grpl` box (entity groups) for a stereo pair: a `ster` group, or a
+//!   `stem` one (a stereo pair with a monoscopic fallback), as iPhone spatial photos carry.
 //!
 //! The ICC profile is left to the decoder, which reads it for rendering; nothing here needs it.
 //! Every size and offset is checked against the buffer; the boxes read, the items considered and
@@ -115,6 +117,45 @@ pub(crate) fn embeds_location(bytes: &[u8]) -> Option<bool> {
     Some(false)
 }
 
+/// The left-eye and right-eye images of a stereo HEIF file, by item (entity) id.
+///
+/// The data is called `stereo` (the HEIF `ster`/`stem` entity group). Apple calls a file
+/// "spatial" only when it also carries per-eye camera metadata, which we don't check; the UI
+/// labels it Spatial because that's the users' term.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StereoPair {
+    pub left: u32,
+    pub right: u32,
+}
+
+/// The stereo pair a HEIF file declares in its `grpl` box: the first `ster` group of exactly two
+/// entities (left, right), or `stem` group of exactly three (left, right, then the monoscopic
+/// image). `None` when `bytes` is not HEIF or holds no such group; other groups (`altr`, `pymd`,
+/// `brst`, …) and malformed ones are passed over.
+pub(crate) fn stereo_pair(bytes: &[u8]) -> Option<StereoPair> {
+    Container::read(bytes, 0)?.stereo
+}
+
+/// From `grpl`: the first well-formed `ster` (2 entities) or `stem` (3 entities) group.
+fn stereo_group(bytes: &[u8], grpl: &BoxRef, budget: &mut usize) -> Option<StereoPair> {
+    // `grpl` is a plain box; each group inside is a full box: version and flags, the group id,
+    // the entity count, then that many 32-bit entity ids
+    boxes(bytes, grpl.body, grpl.end, budget).iter().find_map(|g| {
+        let wanted: u32 = match &g.kind {
+            b"ster" => 2,
+            b"stem" => 3,
+            _ => return None,
+        };
+        let body = bytes.get(g.body..g.end)?;
+        let count = be32(body, 8)?;
+        let room = body.len().saturating_sub(12) / 4;
+        if count != wanted || usize::try_from(count).ok()? > room {
+            return None;
+        }
+        Some(StereoPair { left: be32(body, 12)?, right: be32(body, 16)? })
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Exif,
@@ -161,6 +202,8 @@ struct Container<'a> {
     more: bool,
     /// Where each of `items` is (from one walk of `iloc`).
     places: Vec<Option<Place>>,
+    /// The stereo pair a `grpl` box declares.
+    stereo: Option<StereoPair>,
 }
 
 impl<'a> Container<'a> {
@@ -169,7 +212,8 @@ impl<'a> Container<'a> {
         if !is_heif(bytes) {
             return None;
         }
-        let mut c = Container { file: bytes, idat: None, iloc: None, primary: None, items: Vec::new(), more: false, places: Vec::new() };
+        let mut c =
+            Container { file: bytes, idat: None, iloc: None, primary: None, items: Vec::new(), more: false, places: Vec::new(), stereo: None };
         let mut budget = MAX_BOXES;
         let top = boxes(bytes, 0, bytes.len(), &mut budget);
         let Some(meta) = top.iter().find(|b| &b.kind == b"meta") else { return Some(c) };
@@ -184,6 +228,9 @@ impl<'a> Container<'a> {
         c.primary = payload(b"pitm").and_then(primary_item).filter(|p| ids.binary_search(p).is_ok());
         if let Some(iref) = child(b"iref") {
             link(bytes, iref, c.primary, &mut c.items, &mut budget);
+        }
+        if let Some(grpl) = child(b"grpl") {
+            c.stereo = stereo_group(bytes, grpl, &mut budget);
         }
         c.idat = payload(b"idat");
         c.iloc = payload(b"iloc").and_then(Iloc::parse);
@@ -610,13 +657,23 @@ mod tests {
         iloc: (u8, [u8; 4]),
         /// 32-bit item ids: `infe` version 3, `pitm` and `iref` version 1 (`iloc` must be version 2).
         wide: bool,
+        /// The `grpl` box's payload (its entity groups), and whether it comes first in `meta`.
+        grpl: Option<(Vec<u8>, bool)>,
     }
 
     impl Heif {
         /// A primary HEVC picture, item 1 (its bytes don't matter here).
         fn new() -> Heif {
             let picture = Item { id: 1, kind: b"hvc1", mime: ("", ""), data: b"coded picture".to_vec(), store: Store::File, extents: 1 };
-            Heif { ftyp: b"heic\0\0\0\0mif1heic".to_vec(), primary: 1, items: vec![picture], refs: Vec::new(), iloc: (1, [4, 4, 0, 0]), wide: false }
+            Heif {
+                ftyp: b"heic\0\0\0\0mif1heic".to_vec(),
+                primary: 1,
+                items: vec![picture],
+                refs: Vec::new(),
+                iloc: (1, [4, 4, 0, 0]),
+                wide: false,
+                grpl: None,
+            }
         }
 
         fn item(mut self, id: u32, kind: &'static [u8; 4], data: Vec<u8>, store: Store, extents: usize) -> Heif {
@@ -635,6 +692,18 @@ mod tests {
 
         fn iref(mut self, kind: &'static [u8; 4], from: u32, to: &[u32]) -> Heif {
             self.refs.push((kind, from, to.to_vec()));
+            self
+        }
+
+        /// A `grpl` box after the other `meta` children, holding these entity groups (type, ids).
+        fn grpl(self, groups: &[(&[u8; 4], &[u32])]) -> Heif {
+            let body: Vec<u8> = groups.iter().enumerate().flat_map(|(n, (kind, ids))| group(kind, n as u32 + 100, ids.len() as u32, ids)).collect();
+            self.grpl_raw(body, false)
+        }
+
+        /// A `grpl` box holding `body` as is, first or last in `meta`.
+        fn grpl_raw(mut self, body: Vec<u8>, first: bool) -> Heif {
+            self.grpl = Some((body, first));
             self
         }
 
@@ -702,7 +771,7 @@ mod tests {
                 }
             }
             let ref_version = if self.wide { 1 } else { 0 };
-            let boxes = [
+            let mut boxes = vec![
                 full(b"hdlr", 0, &hdlr),
                 full(b"pitm", ref_version, &pitm),
                 full(b"iinf", ref_version, &iinf),
@@ -710,6 +779,11 @@ mod tests {
                 full(b"iloc", version, &iloc),
                 bx(b"idat", &idat),
             ];
+            match &self.grpl {
+                Some((body, true)) => boxes.insert(0, bx(b"grpl", body)),
+                Some((body, false)) => boxes.push(bx(b"grpl", body)),
+                None => {}
+            }
             full(b"meta", 0, &boxes.concat())
         }
 
@@ -972,13 +1046,16 @@ mod tests {
             .item(2, b"Exif", exif_item(b"Exif\0\0", &SWEEP_TIFF), Store::Idat, 2)
             .xmp(3, ("application/rdf+xml", ""), xmp)
             .cdsc(2, &[1])
-            .cdsc(3, &[1]);
+            .cdsc(3, &[1])
+            .grpl(&[(b"altr", &[1, 2]), (b"stem", &[4, 5, 1])]);
         h.items[2].extents = 3;
         h.iloc = (1, [4, 8, 4, 4]);
         let f = h.build();
         assert!(crate::embedded(&f).exif.is_some() && crate::embedded(&f).xmp.is_some());
+        assert_eq!(crate::stereo_pair(&f), pair(4, 5));
         for n in 0..f.len() {
             let _ = crate::extract(&f[..n]);
+            let _ = crate::stereo_pair(&f[..n]);
         }
         for i in 0..f.len() {
             for v in [0x00, 0xff, 0x7f, 0x01] {
@@ -986,6 +1063,7 @@ mod tests {
                 g[i] = v;
                 let _ = crate::extract(&g);
                 let _ = crate::file_tag_rows(&g);
+                let _ = crate::stereo_pair(&g);
             }
         }
     }
@@ -1130,14 +1208,128 @@ mod tests {
         assert_eq!(crate::extract(&base(Heif::new()).build()).model, None);
     }
 
+    /// An entity group box: version 0, the group id, the entity count it declares, the ids.
+    fn group(kind: &[u8; 4], id: u32, count: u32, ids: &[u32]) -> Vec<u8> {
+        let mut g = Vec::new();
+        put(&mut g, u64::from(id), 4);
+        put(&mut g, u64::from(count), 4);
+        ids.iter().for_each(|e| put(&mut g, u64::from(*e), 4));
+        full(kind, 0, &g)
+    }
+
+    fn pair(left: u32, right: u32) -> Option<crate::StereoPair> {
+        Some(crate::StereoPair { left, right })
+    }
+
+    /// A `ster` group of two entities is the stereo pair, left then right; a `stem` group of three
+    /// gives its first two (the third is the monoscopic image).
+    #[test]
+    fn stereo_and_stereo_with_mono_groups_give_the_pair() {
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"ster", &[2, 3])]).build()), pair(2, 3));
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"stem", &[4, 5, 1])]).build()), pair(4, 5));
+        // 32-bit ids are carried through as they are
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"ster", &[0x0001_0002, 0xffff_fffe])]).build()), pair(0x0001_0002, 0xffff_fffe));
+    }
+
+    /// A `ster` or `stem` group of any other size is not a pair.
+    #[test]
+    fn stereo_groups_of_the_wrong_size_are_not_a_pair() {
+        for ids in [&[][..], &[2], &[2, 3, 4], &[2, 3, 4, 5]] {
+            assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"ster", ids)]).build()), None, "ster {ids:?}");
+        }
+        for ids in [&[][..], &[2], &[2, 3], &[2, 3, 4, 5]] {
+            assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"stem", ids)]).build()), None, "stem {ids:?}");
+        }
+    }
+
+    /// Other groups don't count (an `altr` group, as on iPhone HDR gain-map shots), but a stereo
+    /// group after them does; the first qualifying group wins.
+    #[test]
+    fn other_groups_are_passed_over() {
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"altr", &[1, 2])]).build()), None);
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"pymd", &[1, 2]), (b"brst", &[3, 4])]).build()), None);
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"altr", &[1, 2]), (b"ster", &[2, 3])]).build()), pair(2, 3));
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[(b"ster", &[2]), (b"ster", &[5, 6]), (b"ster", &[7, 8])]).build()), pair(5, 6));
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl(&[]).build()), None);
+        assert_eq!(crate::stereo_pair(&Heif::new().build()), None, "no grpl");
+    }
+
+    /// `grpl` is found wherever it sits among the `meta` box's children, and the EXIF and XMP are
+    /// still read beside it.
+    #[test]
+    fn grpl_before_or_after_the_other_boxes() {
+        let groups = group(b"ster", 100, 2, &[2, 3]);
+        let tiff = tiff_with("Stereo camera");
+        let xmp = br#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#;
+        for first in [true, false] {
+            let f = Heif::new()
+                .item(8, b"Exif", exif_item(b"Exif\0\0", &tiff), Store::File, 1)
+                .xmp(9, ("application/rdf+xml", ""), xmp.to_vec())
+                .cdsc(8, &[1])
+                .cdsc(9, &[1])
+                .grpl_raw(groups.clone(), first)
+                .build();
+            assert_eq!(crate::stereo_pair(&f), pair(2, 3), "first: {first}");
+            let m = crate::extract(&f);
+            assert_eq!((m.model.as_deref(), m.rating), (Some("Stereo camera"), Some(4)), "first: {first}");
+        }
+    }
+
+    /// Cut-off or malformed groups, and files that aren't HEIF, are no pair.
+    #[test]
+    fn malformed_groups_and_other_files_are_no_pair() {
+        // the entity count says more than the box holds
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl_raw(group(b"ster", 100, 2, &[2]), false).build()), None);
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl_raw(group(b"stem", 100, 3, &[2, 3]), false).build()), None);
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl_raw(group(b"ster", 100, u32::MAX, &[2, 3]), false).build()), None);
+        // a group that stops inside its header or before its entities
+        let whole = group(b"ster", 100, 2, &[2, 3]);
+        for cut in 0..whole.len() {
+            let f = Heif::new().grpl_raw(whole[..cut].to_vec(), true).build();
+            assert_eq!(crate::stereo_pair(&f), None, "group cut at {cut}");
+        }
+        // a box size that claims more than `grpl` holds
+        let mut long = whole.clone();
+        long[..4].copy_from_slice(&64u32.to_be_bytes());
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl_raw(long, false).build()), None);
+        // the file cut anywhere inside `grpl`
+        let f = Heif::new().grpl(&[(b"ster", &[2, 3])]).build();
+        let grpl_at = f.windows(4).position(|w| w == b"grpl").expect("grpl") - 4;
+        for cut in grpl_at..grpl_at + 8 + whole.len() {
+            assert_eq!(crate::stereo_pair(&f[..cut]), None, "file cut at {cut}");
+        }
+        // not HEIF
+        assert_eq!(crate::stereo_pair(&[]), None);
+        assert_eq!(crate::stereo_pair(b"\xff\xd8\xff\xe0\0\x10JFIF\0"), None);
+        let mut jxl = Heif::new().grpl(&[(b"ster", &[2, 3])]);
+        jxl.ftyp = b"jxl \0\0\0\0jxl ".to_vec();
+        assert_eq!(crate::stereo_pair(&jxl.build()), None);
+    }
+
+    /// A stereo group in a box with a 64-bit size is read like any other.
+    #[test]
+    fn stereo_group_with_a_large_size() {
+        let mut g = vec![0, 0, 0, 1];
+        g.extend_from_slice(b"ster");
+        let payload = &group(b"ster", 100, 2, &[2, 3])[8..];
+        g.extend_from_slice(&(16 + payload.len() as u64).to_be_bytes());
+        g.extend_from_slice(payload);
+        assert_eq!(crate::stereo_pair(&Heif::new().grpl_raw(g, false).build()), pair(2, 3));
+    }
+
     proptest::proptest! {
         /// Arbitrary bytes behind a HEIF `ftyp` never panic.
         #[test]
         fn arbitrary_boxes_never_panic(body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512)) {
             let f = [bx(b"ftyp", b"heic\0\0\0\0mif1heic"), body.clone()].concat();
             let _ = crate::embedded(&f);
+            let _ = crate::stereo_pair(&f);
+            let _ = crate::stereo_pair(&body);
             let meta = [bx(b"ftyp", b"heic\0\0\0\0mif1heic"), full(b"meta", 0, &body)].concat();
             let _ = crate::extract(&meta);
+            let _ = crate::stereo_pair(&meta);
+            let grpl = [bx(b"ftyp", b"heic\0\0\0\0mif1heic"), full(b"meta", 0, &bx(b"grpl", &body))].concat();
+            let _ = crate::stereo_pair(&grpl);
         }
     }
 }
