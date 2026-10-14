@@ -315,7 +315,7 @@ pub fn embeds_location(bytes: &[u8]) -> bool {
     heif::embeds_location(bytes).unwrap_or_else(|| extract(bytes).gps.is_some())
 }
 
-/// The left-eye and right-eye images of a stereo HEIF / HEIC file (an iPhone spatial photo), by
+/// The left-eye and right-eye images of a stereo HEIF / HEIC file (a spatial photo), by
 /// item id: the first `ster` entity group of exactly two entities, or `stem` group of exactly
 /// three (the third is the monoscopic fallback). Read from the container alone, nothing is
 /// decoded. `None` for anything else: not HEIF, no such group, or malformed boxes.

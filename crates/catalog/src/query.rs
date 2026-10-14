@@ -34,7 +34,7 @@ pub struct Filter {
     pub labels: Vec<ColorLabel>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
-    /// `Some(true)` = stereo pairs only (iPhone spatial photos, shown as Spatial), `Some(false)` = hide
+    /// `Some(true)` = stereo pairs only (spatial photos, shown as Spatial), `Some(false)` = hide
     /// them; a photo not checked yet counts as not stereo.
     pub stereo: Option<bool>,
     pub album: Option<AlbumId>,
