@@ -47,7 +47,7 @@ pub struct Spec<'a> {
     pub thumbnail: Option<Sampler<'a>>,
     /// Auxiliary images of these types the decoder must ignore (HDR gain map, depth…).
     pub ignored_aux: Vec<&'static str>,
-    /// A stereo pair (an iPhone spatial photo): a second image of the same size and samples (the
+    /// A stereo pair (a spatial photo): a second image of the same size and samples (the
     /// right eye) and a `grpl` box with a `ster` entity group naming the primary image (left) and it.
     pub stereo: bool,
 }

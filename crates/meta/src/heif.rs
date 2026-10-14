@@ -18,7 +18,7 @@
 //!   other images (a thumbnail, a depth map, another photo of a collection) is not this photo's.
 //! - [`embeds_location`] looks at every EXIF and XMP item instead, for export's "remove location".
 //! - [`stereo_pair`] reads the `grpl` box (entity groups) for a stereo pair: a `ster` group, or a
-//!   `stem` one (a stereo pair with a monoscopic fallback), as iPhone spatial photos carry.
+//!   `stem` one (a stereo pair with a monoscopic fallback), as a phone's spatial photos carry.
 //!
 //! The ICC profile is left to the decoder, which reads it for rendering; nothing here needs it.
 //! Every size and offset is checked against the buffer; the boxes read, the items considered and
@@ -1242,7 +1242,7 @@ mod tests {
         }
     }
 
-    /// Other groups don't count (an `altr` group, as on iPhone HDR gain-map shots), but a stereo
+    /// Other groups don't count (an `altr` group, as on a phone's HDR gain-map shots), but a stereo
     /// group after them does; the first qualifying group wins.
     #[test]
     fn other_groups_are_passed_over() {
