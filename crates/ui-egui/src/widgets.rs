@@ -79,6 +79,12 @@ pub fn preview_only_variant(reason: &str) -> &str {
     reason.split(" (").next().unwrap_or(reason).trim()
 }
 
+/// The hover text of the spatial-photo (stereo pair) badge in the grid and in Info: the name on
+/// one line, what it means on the next.
+pub fn stereo_tip() -> String {
+    format!("{}\n{}", crate::i18n::tr("Spatial"), crate::i18n::tr("A stereo pair: left-eye and right-eye images (a spatial photo)"))
+}
+
 /// What a preview-only raw means for the user (see `Photo::preview_only`).
 pub fn preview_only_explanation(reason: &str) -> String {
     if reason.starts_with("Nikon High Efficiency NEF (") {

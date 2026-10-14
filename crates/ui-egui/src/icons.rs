@@ -103,6 +103,8 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// A spatial (stereo) photo: a wireframe cube seen from a corner.
+    Cube,
 }
 
 struct Pen<'a> {
@@ -223,6 +225,12 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             // outer arc of the disc, then the inner arc of the bite, meeting at the horns
             pen.arc(10.0, 10.0, 6.5, 2.9, 263.8);
             pen.arc(13.4, 6.4, 5.0, 214.9, 51.8);
+        }
+        Cube => {
+            // isometric: the silhouette hexagon, then the three edges that meet at the near corner
+            pen.closed(&[(10.0, 2.5), (16.5, 6.25), (16.5, 13.75), (10.0, 17.5), (3.5, 13.75), (3.5, 6.25)]);
+            pen.line(&[(3.5, 6.25), (10.0, 10.0), (16.5, 6.25)]);
+            pen.line(&[(10.0, 10.0), (10.0, 17.5)]);
         }
         Search => {
             pen.circle(8.5, 8.5, 5.0);

@@ -9,7 +9,7 @@ use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
-use crate::widgets::{divider, register, slider, text_button};
+use crate::widgets::{divider, register, slider, stereo_tip, text_button};
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -833,24 +833,21 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
         if !m.lens.is_empty() {
             ui.add(egui::Label::new(dim(&m.lens)).truncate());
         }
+        // pills first (right-aligned), then the size text truncates into whatever width is left,
+        // so a narrow panel or a long format name never paints the pills over the text
         ui.horizontal(|ui| {
-            ui.label(dim(&format!("{} × {}  ·  {}", p.width, p.height, human_size(p.file_size))));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
                     ui.label(egui::RichText::new(p.format.to_uppercase()).size(10.5).color(t.text_label));
                 });
                 if p.stereo == Some(true) {
-                    let r = egui::Frame::NONE
-                        .fill(t.chrome)
-                        .corner_radius(3.0)
-                        .inner_margin(egui::Margin::symmetric(5, 1))
-                        .show(ui, |ui| {
-                            ui.label(egui::RichText::new(crate::i18n::tr("Spatial")).size(10.5).color(t.text_label));
-                        })
-                        .response
-                        .on_hover_text(crate::i18n::tr("A stereo pair: left-eye and right-eye images (an iPhone spatial photo)"));
-                    register(ui.ctx(), "pill:stereo:info".to_string(), r.rect);
+                    // an icon, not a word: the row stays the same width in every language
+                    let (rect, r) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                    paint(ui.painter(), rect, Icon::Cube, t.text_label);
+                    r.on_hover_text(stereo_tip());
+                    register(ui.ctx(), "pill:stereo:info".to_string(), rect);
                 }
+                ui.add(egui::Label::new(dim(&format!("{} × {} · {}", p.width, p.height, human_size(p.file_size)))).truncate());
             });
         });
         let rows = [
