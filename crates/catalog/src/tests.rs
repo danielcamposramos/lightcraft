@@ -1081,3 +1081,31 @@ fn a_batch_that_cannot_be_rolled_back_whole_makes_earlier_changes_unknown() {
     assert_eq!(c.touched_since(start), None, "so nothing is said of what changed");
     assert_eq!(c.touched_since(c.revision), Some(vec![]), "from after it, it is known again");
 }
+
+#[test]
+fn stereo_filter_tokens_and_describe() {
+    let mut c = Catalog::new();
+    let yes = photo(&mut c, "a.heic", "2026-04-01T10:00:00");
+    let no = photo(&mut c, "b.heic", "2026-04-02T10:00:00");
+    let unknown = photo(&mut c, "c.heic", "2026-04-03T10:00:00");
+    c.apply(Op::SetStereo { id: yes, stereo: Some(true) }).unwrap();
+    c.apply(Op::SetStereo { id: no, stereo: Some(false) }).unwrap();
+    let q = |f: Filter| {
+        let mut v = c.query(&f, &Sort::default());
+        v.sort();
+        v
+    };
+    assert_eq!(q(Filter { stereo: Some(true), ..Default::default() }), vec![yes]);
+    assert_eq!(q(Filter { stereo: Some(false), ..Default::default() }), vec![no, unknown]);
+    assert_eq!(q(Filter::default()), vec![yes, no, unknown]);
+    for key in ["stereo", "spatial"] {
+        assert_eq!(q(Filter { text: format!("{key}:yes"), ..Default::default() }), vec![yes]);
+        assert_eq!(q(Filter { text: format!("{key}:no"), ..Default::default() }), vec![no, unknown]);
+    }
+    let old: Filter = serde_json::from_str(r#"{"rating":3}"#).unwrap();
+    assert_eq!(old.stereo, None);
+    let f = Filter { stereo: Some(true), ..Default::default() };
+    assert_eq!(serde_json::from_str::<Filter>(&serde_json::to_string(&f).unwrap()).unwrap().stereo, Some(true));
+    assert!(f.describe().contains("spatial") && !f.describe().contains("not spatial"));
+    assert!(Filter { stereo: Some(false), ..Default::default() }.describe().contains("not spatial"));
+}

@@ -20,7 +20,7 @@ pub enum RatingOp {
 #[serde(default, rename_all = "camelCase")]
 pub struct Filter {
     /// Free-text search: every token must match filename, title, caption, keywords, camera, lens,
-    /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2` are fielded.
+    /// location or format. Tokens like `rating:3`, `flag:pick`, `iso:>800`, `camera:x2`, `stereo:yes` (alias `spatial:`) are fielded.
     pub text: String,
     pub rating: u8,
     pub rating_op: RatingOp,
@@ -38,6 +38,9 @@ pub struct Filter {
     pub labels: Vec<ColorLabel>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
+    /// `Some(true)` = stereo pairs only (iPhone spatial photos, shown as Spatial), `Some(false)` = hide
+    /// them; a photo not checked yet counts as not stereo.
+    pub stereo: Option<bool>,
     pub album: Option<AlbumId>,
     /// Show "Recently Deleted" instead of the library.
     pub deleted: bool,
@@ -212,6 +215,7 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
             "edited" => (val == "true" || val == "yes") == p.is_edited(),
+            "stereo" | "spatial" => (val == "true" || val == "yes") == (p.stereo == Some(true)),
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
@@ -285,6 +289,9 @@ impl Filter {
         }
         if let Some(e) = self.edited {
             v.push(if e { "edited".into() } else { "unedited".into() });
+        }
+        if let Some(s) = self.stereo {
+            v.push(if s { "spatial".into() } else { "not spatial".into() });
         }
         for (name, val) in [
             ("keyword", &self.keyword),
@@ -379,6 +386,9 @@ impl Filter {
             return false;
         }
         if self.edited.is_some_and(|e| e != p.is_edited()) {
+            return false;
+        }
+        if self.stereo.is_some_and(|s| s != (p.stereo == Some(true))) {
             return false;
         }
         if let Some(rs) = &self.rule_set

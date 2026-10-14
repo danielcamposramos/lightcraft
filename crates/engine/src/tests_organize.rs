@@ -380,3 +380,27 @@ fn stack_toggle_by_ids_leaves_the_selection_alone() {
     // without `ids` the selection still decides (a loose photo selected: not available)
     assert!(matches!(s.execute("stack.toggle", &json!({})), Err(crate::EngineError::Disabled(..))));
 }
+
+/// The Spatial filter keeps stereo pairs (or hides them) and never counts an unchecked photo as one.
+#[test]
+fn stereo_filter_and_chip() {
+    let dir = temp_dir("stereo");
+    let mut s = open(&dir);
+    let vis = s.visible_cloned();
+    let (a, b) = (vis[0], vis[1]);
+    s.apply_system(lightcraft_catalog::Op::SetStereo { id: a, stereo: Some(true) }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetStereo { id: b, stereo: Some(false) }).unwrap();
+    s.execute("library.filter", &json!({"stereo": true})).unwrap();
+    assert_eq!(s.visible_cloned(), vec![a]);
+    let chips = crate::filter_chips(&s.filter, &s.catalog);
+    assert_eq!(chips.len(), 1);
+    assert_eq!(chips[0].label, "Spatial");
+    assert_eq!(chips[0].clear, json!({"stereo": null}));
+    s.execute("library.filter", &json!({"stereo": false})).unwrap();
+    let hidden = s.visible_cloned();
+    assert!(!hidden.contains(&a) && hidden.contains(&b) && hidden.len() == vis.len() - 1);
+    assert_eq!(crate::filter_chips(&s.filter, &s.catalog)[0].label, "Not spatial");
+    s.execute("library.filter", &chips[0].clear).unwrap();
+    assert_eq!(s.filter.stereo, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
