@@ -295,21 +295,37 @@ pub(crate) fn reload_ops(
     // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
     // nothing already set is overwritten
     let meta_ops = fill_missing_meta(id, ph, info);
-    let mut mine: Vec<Op> =
-        content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
+    let mut mine: Vec<Op> = content_op(id, ph, info.clone())
+        .into_iter()
+        .chain(meta_ops)
+        .chain(lens_ops(id, ph, info))
+        .chain(as_shot_wb_op(id, ph, info))
+        .chain(stereo_op(id, ph, info))
+        .collect();
     if !mine.is_empty() {
         ops.append(&mut mine);
         changed.push(id);
     }
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .chain(stereo_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
         }
     }
+}
+
+/// The op that records whether the file is a stereo pair (an iPhone spatial photo), or none when the catalog already
+/// agrees or the probe did not look (`info.stereo` is `None`: that never erases what the catalog has). A photo
+/// imported before the flag existed has `None` until Reload reads the file (issue #446).
+pub(crate) fn stereo_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
+    (info.stereo.is_some() && info.stereo != ph.stereo).then_some(Op::SetStereo { id, stereo: info.stereo })
 }
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
@@ -386,7 +402,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true`; whether the file is a stereo pair (an iPhone spatial photo, shown as Spatial) is read too → {reloaded}",
             has_selection,
             reload
         ),
@@ -490,6 +506,23 @@ mod tests {
         assert!(!after.is_edited());
         assert_eq!(*after.develop, after.camera_defaults());
         assert!(lens_ops(after.id, after, &info).is_empty(), "nothing more to do the second time");
+    }
+
+    #[test]
+    fn stereo_op_fills_in_and_corrects_the_flag_but_a_silent_probe_changes_nothing() {
+        let mut ph = old_rw2();
+        let yes = crate::media::ProbeInfo { stereo: Some(true), ..Default::default() };
+        let no = crate::media::ProbeInfo { stereo: Some(false), ..Default::default() };
+        let silent = crate::media::ProbeInfo::default();
+        // not checked yet, the file is a stereo pair
+        assert!(matches!(stereo_op(ph.id, &ph, &yes), Some(Op::SetStereo { stereo: Some(true), .. })));
+        ph.stereo = Some(true);
+        // already agrees
+        assert!(stereo_op(ph.id, &ph, &yes).is_none());
+        // the probe did not look: keep what the catalog has
+        assert!(stereo_op(ph.id, &ph, &silent).is_none());
+        // the file no longer is one
+        assert!(matches!(stereo_op(ph.id, &ph, &no), Some(Op::SetStereo { stereo: Some(false), .. })));
     }
 
     #[test]
