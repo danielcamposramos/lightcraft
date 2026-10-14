@@ -871,6 +871,14 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
             right -= 20.0;
         }
+        if photo.stereo == Some(true) {
+            // a spatial photo (stereo pair): a cube next to the edited icon, named on hover
+            let br = Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0));
+            paint(p, br, Icon::Cube, t.text_label);
+            register(ui.ctx(), format!("badge:stereo:{}", id.0), br);
+            ui.interact(br, egui::Id::new(("stereo-badge", id.0)), Sense::hover()).on_hover_text(crate::widgets::stereo_tip());
+            right -= 20.0;
+        }
         if let Some(l) = photo.label {
             p.circle(pos2(right - 12.0, bar.center().y), 5.0, label_color(l), Stroke::new(1.0, Color32::from_black_alpha(120)));
         }
