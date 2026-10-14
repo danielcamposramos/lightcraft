@@ -2763,9 +2763,10 @@ mod tests {
     }
 
     /// Issue #446: a stereo pair (a spatial photo) shows a cube badge on its grid cell's
-    /// badge bar and a "Spatial" pill in Info; other photos show neither.
+    /// badge bar and on its filmstrip thumbnail, and a "Spatial" pill in Info; other photos show
+    /// none of them.
     #[test]
-    fn stereo_photo_shows_spatial_badge_in_grid_and_pill_in_info() {
+    fn stereo_photo_shows_spatial_badge_in_grid_filmstrip_and_info() {
         let mut h = demo([1300.0, 900.0]);
         let t = Duration::from_secs(10);
         let vis = h.app.session.visible_cloned();
@@ -2780,10 +2781,13 @@ mod tests {
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [st.0, other.0]}}), t);
         h.settle(SETTLE);
         assert_eq!(ids(&mut h, "badge:stereo:"), vec![format!("badge:stereo:{}", st.0)]);
-        // Info: the pill, on the stereo photo only
+        // Detail with the filmstrip: the thumbnail's badge bar shows the cube on the stereo photo only
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [st.0]}}), t);
-        h.app.ui.right = crate::state::RightPanel::Info;
+        h.request("ui.set", json!({"view": "detail", "filmstrip": true, "right": "info"}), t);
         h.settle(SETTLE);
+        assert!(h.app.ui.settings.film_badges);
+        assert_eq!(ids(&mut h, "film:stereo:"), vec![format!("film:stereo:{}", st.0)]);
+        // Info: the pill, on the stereo photo only
         assert_eq!(ids(&mut h, "pill:stereo:"), vec!["pill:stereo:info".to_string()]);
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [other.0]}}), t);
         h.settle(SETTLE);
