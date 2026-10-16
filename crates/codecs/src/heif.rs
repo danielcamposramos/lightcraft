@@ -34,6 +34,11 @@ pub(crate) fn header(_bytes: &[u8]) -> Result<(u32, u32, u16)> {
     Err(Error::Unsupported(F, NOT_IN_BUILD))
 }
 
+#[cfg(not(feature = "heif"))]
+pub(crate) fn decode_item(_bytes: &[u8], _id: u32, _opts: &DecodeOptions) -> Result<Decoded> {
+    Err(Error::Unsupported(F, NOT_IN_BUILD))
+}
+
 #[cfg(feature = "heif")]
 fn err(e: lightcraft_heif::Error) -> Error {
     match e {
@@ -71,10 +76,26 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         }
         _ => None,
     };
-    let mut decoded = match thumb {
+    let decoded = match thumb {
         Some(t) => t,
         None => lightcraft_heif::decode(bytes, &options).map_err(err)?,
     };
+    converted(decoded, (info.width, info.height), opts)
+}
+
+/// Image item `id` (an eye of a stereo pair, say), decoded at its full size and fitted within
+/// `opts.max_size` like any picture.
+#[cfg(feature = "heif")]
+pub(crate) fn decode_item(bytes: &[u8], id: u32, opts: &DecodeOptions) -> Result<Decoded> {
+    let options = lightcraft_heif::Options { max_pixels: opts.max_pixels, apply_transforms: true };
+    let decoded = lightcraft_heif::decode_image(bytes, id, &options).map_err(err)?;
+    let size = (decoded.width, decoded.height);
+    converted(decoded, size, opts)
+}
+
+/// A decoded HEIF image as the codecs' [`Decoded`]; `source_dims` is the full-resolution size.
+#[cfg(feature = "heif")]
+fn converted(mut decoded: lightcraft_heif::Decoded, source_dims: (u32, u32), opts: &DecodeOptions) -> Result<Decoded> {
     let raw = Raw {
         width: decoded.width as usize,
         height: decoded.height as usize,
@@ -94,7 +115,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         hint: crate::space::SourceSpace::from_cicp(c.primaries, c.transfer),
         ..Default::default()
     };
-    finish(F, raw, meta, (info.width, info.height), opts)
+    finish(F, raw, meta, source_dims, opts)
 }
 
 #[cfg(test)]

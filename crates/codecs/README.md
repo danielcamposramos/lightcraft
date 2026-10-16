@@ -15,6 +15,9 @@ let working: Rgb32f = to_working(&d);                    // linear Rec.2020 D65 
 let fast = decode(&bytes, DecodeOptions::fit(2048, 2048))?; // JPEG: DCT-domain 1/2..1/8 scaling
 let t: Thumbnail = decode_thumbnail(&bytes, 256)?;       // embedded EXIF/MPF preview or scaled decode
 let h: Header = read_header(&bytes)?;                    // stored width/height + orientation, no pixels decoded
+let l: Option<StereoLayout> = stereo::layout(&bytes, is_jps);  // HEIF pair, MPO, JPS, PNG sTER: where the eyes are
+let (left, right) = stereo::decode_pair(&bytes, &l.unwrap(), DecodeOptions::fit(2048, 2048))?;
+stereo::encode_mpo(&side_by_side, 90, ChromaSubsampling::S444, &meta)?; // also encode_jps, encode_png
 
 let icc = icc::write_named(NamedSpace::DisplayP3);       // or icc::write_matrix_trc(&space, &Trc::…)
 let meta = EncodeMeta { icc: Some(&icc), exif: Some(&exif), xmp: Some(&xmp) };
@@ -55,6 +58,7 @@ CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `d
 | JPEG XL | yes (jxl-oxide, feature `jxl`, default on) | yes (jixel, `encode_jxl`, feature `jxl`, native only): lossy VarDCT / lossless Modular, 8/16-bit, effort (fast / normal), progressive; HDR as 16-bit Rec. 2020 PQ | decode: enum colour → rendered straight to linear Rec.2020 (XYB via linear sRGB primaries); ICC → our ICC path; orientation applied by the decoder (reported as 1). Encode: lossy files declare an enum encoding (sRGB, Display P3, Rec. 2020 BT.709 curve, Rec. 2020 PQ), lossless ones embed the ICC profile; EXIF / XMP in `Exif` / `xml ` boxes |
 | AVIF | **no** | yes (ravif/rav1e, native only, feature `avif`) | 8/10-bit sRGB, EXIF; no ICC in the muxer. HDR: `encode_avif_hdr` writes 10-bit BT.2020 PQ (SDR white at 203 cd/m², CICP `nclx` + `clli`) or HLG (`hlg_signal`, SDR white at 0.75) |
 | HEIC/HEIF | yes with feature `heif` (lightcraft-heif: heic-rs + libheif-matching colour; 4:2:0/mono, 8–10-bit, grids, irot/imir/clap, ICC/nclx/VUI, EXIF/XMP, thumbnail item) | — | 4:2:2/4:4:4 (Canon/Sony HIF) unsupported |
+| Stereo pairs | HEIF stereo pair entity group (`ster`, ISO/IEC 23008-12:2025 §6.8.5, or `stem`, Amd. 1:2025 §6.8.11: the eyes' image items, decoded with feature `heif`), MPO (two Disparity images, left = the lowest MP Individual Image Number, CIPA DC-007 §6.2.2.2), JPS (APP3 `_JPSJPS_` descriptor: side by side, over/under, interleaved rows, anaglyph, half size, separation, field order; none = cross-eyed side by side), PNG `sTER` (mode 0/1, padding columns) | MPO (left eye first, viewpoints 1 and 2), JPS (cross-eyed, with a descriptor), PNG + `sTER` mode 1 | `stereo` module; specifications: ISO/IEC 23008-12:2025 (and Amd. 1:2025), CIPA DC-007-2009, VRex "General Purpose Stereoscopic Data Descriptor" (1997), Extensions to the PNG 1.2 Specification 1.4.0 §3.6. An anaglyph's eyes are rebuilt from its colours (approximate) |
 | Gain map JPEG (HDR) | gain map found and decoded (`gainmap::read_jpeg`): ISO 21496-1 metadata, else Adobe `hdrgm` XMP | yes (`gainmap::encode_jpeg`) | CIPA DC-007 MPF index (gain map typed `0x050000`), ISO 21496-1 APP2 on both images, `hdrgm` + Container XMP for Android/Chrome, Apple `HDRGainMap`/`HDRToneMap` XMP; gain maps are never used as thumbnails |
 
 ## Colour
@@ -91,6 +95,7 @@ All pure Rust, verified with `cargo info` / `cargo tree`:
 | image-webp | MIT OR Apache-2.0 | WebP |
 | image (gif, bmp only) | MIT OR Apache-2.0 | GIF/BMP |
 | moxcms | BSD-3-Clause OR Apache-2.0 | ICC parse/write, CMS |
+| crc32fast | MIT OR Apache-2.0 | PNG chunk CRC (stereo `sTER`) |
 | jxl-oxide | MIT OR Apache-2.0 | JPEG XL decode |
 | jixel | BSD-3-Clause OR Apache-2.0 | JPEG XL encode (native only) |
 | ravif (+ rav1e, avif-serialize) | BSD-3-Clause / BSD-2-Clause | AVIF encode (native only; heavy to compile) |
