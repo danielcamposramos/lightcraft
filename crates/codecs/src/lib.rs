@@ -9,6 +9,8 @@
 //! - [`read_header`] reads a file's stored dimensions and orientation from its headers, without
 //!   decoding pixels (import probes).
 //! - [`decode_thumbnail`] is the fast path for grid thumbnails (EXIF thumbnail or DCT-scaled decode).
+//! - [`stereo`] finds and decodes the two eyes of stereo files (HEIF stereo pairs, MPO, JPS, PNG
+//!   `sTER`) and writes MPO, JPS and PNG `sTER`.
 //! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and, on native targets, AVIF (feature `avif`) and
 //!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
@@ -37,6 +39,7 @@ pub mod proof;
 mod psd;
 mod sniff;
 pub mod space;
+pub mod stereo;
 mod tiff_codec;
 pub mod video;
 mod webp;

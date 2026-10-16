@@ -3135,6 +3135,7 @@ version = "0.8.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "crc32fast",
  "image",
  "image-webp",
  "jixel",
@@ -3144,6 +3145,7 @@ dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-heif",
+ "lightcraft-meta",
  "lightcraft-raster",
  "lightcraft-testkit",
  "moxcms 0.9.1",

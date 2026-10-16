@@ -12,6 +12,7 @@ workspace = true
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
+lightcraft-meta = { workspace = true }
 lightcraft-heif = { workspace = true, optional = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }
@@ -26,6 +27,7 @@ png = { workspace = true }
 tiff = { workspace = true }
 image-webp = { workspace = true }
 moxcms = { workspace = true }
+crc32fast = { workspace = true }
 jxl-oxide = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
