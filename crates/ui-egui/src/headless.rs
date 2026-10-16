@@ -2797,7 +2797,7 @@ mod tests {
         let t = Duration::from_secs(10);
         let vis = h.app.session.visible_cloned();
         let (st, other) = (vis[0], vis[1]);
-        h.app.session.catalog.apply(lightcraft_catalog::Op::SetStereo { id: st, stereo: Some(true) }).unwrap();
+        h.app.session.catalog.apply(lightcraft_catalog::Op::SetStereo { id: st, stereo: Some(lightcraft_catalog::Stereo::Mpo) }).unwrap();
         let ids = |h: &mut Headless, filter: &str| -> Vec<String> {
             let w = h.request("ui.widgets", json!({"filter": filter}), t);
             w["result"].as_array().unwrap_or_else(|| panic!("{w}")).iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect()

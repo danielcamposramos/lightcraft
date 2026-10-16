@@ -31,7 +31,9 @@ pub fn photo_summary(p: &Photo) -> Value {
         // an undecodable raw variant, shown and edited from its embedded JPEG: why
         "previewOnly": p.preview_only,
         // a stereo pair, a spatial photo; null = not checked yet
-        "stereo": p.stereo,
+        "stereo": p.stereo.map(|_| p.is_stereo()),
+        // how its file holds the eyes (HEIF items, MPO, side by side…), for a stereo pair
+        "stereoLayout": p.stereo.filter(|_| p.is_stereo()),
     })
 }
 

@@ -388,8 +388,8 @@ fn stereo_filter_and_chip() {
     let mut s = open(&dir);
     let vis = s.visible_cloned();
     let (a, b) = (vis[0], vis[1]);
-    s.apply_system(lightcraft_catalog::Op::SetStereo { id: a, stereo: Some(true) }).unwrap();
-    s.apply_system(lightcraft_catalog::Op::SetStereo { id: b, stereo: Some(false) }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetStereo { id: a, stereo: Some(lightcraft_catalog::Stereo::Heif) }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetStereo { id: b, stereo: Some(lightcraft_catalog::Stereo::Mono) }).unwrap();
     s.execute("library.filter", &json!({"stereo": true})).unwrap();
     assert_eq!(s.visible_cloned(), vec![a]);
     let chips = crate::filter_chips(&s.filter, &s.catalog);

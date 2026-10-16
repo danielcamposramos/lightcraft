@@ -233,11 +233,11 @@ pub enum Op {
         id: PhotoId,
         wb: Option<(f64, f64)>,
     },
-    /// Whether a photo's file holds a stereo pair, as its file reads (`None` = not checked yet). Bookkeeping, not an
-    /// edit: the look does not change, only the "Spatial" label (issue #446).
+    /// Whether a photo's file holds a stereo pair and how, as its file reads (`None` = not checked yet). Bookkeeping,
+    /// not an edit: the look does not change, only the "Spatial" label (issue #446).
     SetStereo {
         id: PhotoId,
-        stereo: Option<bool>,
+        stereo: Option<Stereo>,
     },
     /// The name shown for a colour label (`None` = its colour's name).
     SetLabelName {

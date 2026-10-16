@@ -511,18 +511,19 @@ mod tests {
     #[test]
     fn stereo_op_fills_in_and_corrects_the_flag_but_a_silent_probe_changes_nothing() {
         let mut ph = old_rw2();
-        let yes = crate::media::ProbeInfo { stereo: Some(true), ..Default::default() };
-        let no = crate::media::ProbeInfo { stereo: Some(false), ..Default::default() };
+        use lightcraft_catalog::Stereo;
+        let yes = crate::media::ProbeInfo { stereo: Some(Stereo::Heif), ..Default::default() };
+        let no = crate::media::ProbeInfo { stereo: Some(Stereo::Mono), ..Default::default() };
         let silent = crate::media::ProbeInfo::default();
         // not checked yet, the file is a stereo pair
-        assert!(matches!(stereo_op(ph.id, &ph, &yes), Some(Op::SetStereo { stereo: Some(true), .. })));
-        ph.stereo = Some(true);
+        assert!(matches!(stereo_op(ph.id, &ph, &yes), Some(Op::SetStereo { stereo: Some(Stereo::Heif), .. })));
+        ph.stereo = Some(Stereo::Heif);
         // already agrees
         assert!(stereo_op(ph.id, &ph, &yes).is_none());
         // the probe did not look: keep what the catalog has
         assert!(stereo_op(ph.id, &ph, &silent).is_none());
         // the file no longer is one
-        assert!(matches!(stereo_op(ph.id, &ph, &no), Some(Op::SetStereo { stereo: Some(false), .. })));
+        assert!(matches!(stereo_op(ph.id, &ph, &no), Some(Op::SetStereo { stereo: Some(Stereo::Mono), .. })));
     }
 
     #[test]

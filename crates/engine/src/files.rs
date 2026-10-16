@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use lightcraft_catalog::{MediaKind, Meta};
+use lightcraft_catalog::{Eye, MediaKind, Meta, Stereo};
+use lightcraft_codecs::stereo::StereoLayout;
 use lightcraft_color::cct::xy_to_temp_tint;
 use lightcraft_geom::Orientation;
 use lightcraft_pipeline::SourceInfo;
@@ -129,6 +130,31 @@ fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
 
+/// Where a stereo file (a HEIF stereo pair, an MPO, a JPS, a PNG with `sTER`) keeps its eyes, read
+/// from its headers; `None` for any other file. The name matters for JPS: a `.jps` JPEG without a
+/// descriptor is a cross-eyed side-by-side pair.
+pub fn stereo_layout(name: &str, bytes: &[u8]) -> Option<StereoLayout> {
+    lightcraft_codecs::stereo::layout(bytes, ext_upper(name) == "JPS")
+}
+
+/// What a file's headers say about stereo, as the catalog records it ([`Stereo`]).
+pub fn stereo_of(name: &str, bytes: &[u8]) -> Stereo {
+    use lightcraft_codecs::stereo::Eye as E;
+    let eye = |e: E| match e {
+        E::Left => Eye::Left,
+        E::Right => Eye::Right,
+    };
+    match stereo_layout(name, bytes) {
+        None => Stereo::Mono,
+        Some(StereoLayout::Heif { .. }) => Stereo::Heif,
+        Some(StereoLayout::Mpo { .. }) => Stereo::Mpo,
+        Some(StereoLayout::SideBySide { first, squeezed, .. }) => Stereo::SideBySide { first: eye(first), half: squeezed },
+        Some(StereoLayout::OverUnder { first, squeezed, .. }) => Stereo::OverUnder { first: eye(first), half: squeezed },
+        Some(StereoLayout::Rows { first }) => Stereo::Rows { first: eye(first) },
+        Some(StereoLayout::Anaglyph { red }) => Stereo::Anaglyph { red: eye(red) },
+    }
+}
+
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:
 /// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
@@ -137,8 +163,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
-    // only HEIF carries the group; any other format is checked (and answered) at once
-    let stereo = Some(lightcraft_meta::stereo_pair(bytes).is_some());
+    // HEIF, MPO, JPS and PNG say so in their headers; any other format is checked (and answered) at once
+    let stereo = Some(stereo_of(name, bytes));
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
