@@ -1601,6 +1601,7 @@ fn heic_exif_reaches_the_catalog_and_all_metadata() {
 /// `Some(false)`. The name holds "heic" so `cargo xtask ci` also runs it with the HEIF decoder.
 #[test]
 fn stereo_heic_is_detected_at_import_and_other_files_are_not() {
+    use lightcraft_catalog::Stereo;
     use lightcraft_heif::testdata::{Spec, build};
     let photo = |x: u32, y: u32| [((x * 5 + y * 11) % 200 + 30) as u16, 120, 140];
     let stereo = build(&Spec { stereo: true, ..Spec::new(64, 32, &photo) });
@@ -1616,7 +1617,7 @@ fn stereo_heic_is_detected_at_import_and_other_files_are_not() {
     let src = temp_dir("heic-stereo");
     write_png(&src.join("flat.png"), 3);
     let png = std::fs::read(src.join("flat.png")).unwrap();
-    assert_eq!(crate::files::probe_bytes("flat.png", &png).unwrap().stereo, Some(false));
+    assert_eq!(crate::files::probe_bytes("flat.png", &png).unwrap().stereo, Some(Stereo::Mono));
     if !lightcraft_codecs::Format::Heif.can_decode() {
         let _ = std::fs::remove_dir_all(&src);
         return; // probing and importing a HEIC need the decoder
@@ -1624,17 +1625,56 @@ fn stereo_heic_is_detected_at_import_and_other_files_are_not() {
     // the second (right-eye) image doesn't change what the decoder shows
     let d = lightcraft_codecs::decode(&stereo, lightcraft_codecs::DecodeOptions::default()).unwrap();
     assert_eq!((d.width, d.height), (64, 32));
-    assert_eq!(crate::files::probe_bytes("x.heic", &stereo).unwrap().stereo, Some(true));
-    assert_eq!(crate::files::probe_bytes("x.heic", &plain).unwrap().stereo, Some(false));
+    assert_eq!(crate::files::probe_bytes("x.heic", &stereo).unwrap().stereo, Some(Stereo::Heif));
+    assert_eq!(crate::files::probe_bytes("x.heic", &plain).unwrap().stereo, Some(Stereo::Mono));
     std::fs::write(src.join("spatial.heic"), &stereo).unwrap();
     std::fs::write(src.join("plain.heic"), &plain).unwrap();
     let mut s = Session::new().with_fs();
     let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     assert_eq!(ids(&r, "imported"), 3, "{r}");
     let by_name = |n: &str| s.catalog.photos().find(|p| p.file_name == n).map(|p| p.stereo);
-    assert_eq!(by_name("spatial.heic"), Some(Some(true)));
-    assert_eq!(by_name("plain.heic"), Some(Some(false)));
-    assert_eq!(by_name("flat.png"), Some(Some(false)));
+    assert_eq!(by_name("spatial.heic"), Some(Some(Stereo::Heif)));
+    assert_eq!(by_name("plain.heic"), Some(Some(Stereo::Mono)));
+    assert_eq!(by_name("flat.png"), Some(Some(Stereo::Mono)));
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+/// MPO, JPS and PNG `sTER` files say how they hold their eyes; import records it (folders bring in
+/// `.mpo` and `.jps` files), and the same picture named `.jpg` is one picture.
+#[test]
+fn stereo_files_record_their_layout_at_import() {
+    use lightcraft_catalog::{Eye, Stereo};
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, encode_jpeg, stereo};
+    let pair = lightcraft_raster::Rgba8::from_fn(64, 16, |x, _| if x < 32 { [200, 40, 40, 255] } else { [40, 40, 200, 255] });
+    let (e, m) = (EncodeImage::rgba8(&pair), EncodeMeta::default());
+    let cross = Stereo::SideBySide { first: Eye::Right, half: false };
+    let files = [
+        ("pair.mpo", stereo::encode_mpo(&e, 90, ChromaSubsampling::S444, &m).unwrap(), Stereo::Mpo),
+        ("pair.jps", stereo::encode_jps(&e, 90, ChromaSubsampling::S444, &m).unwrap(), cross),
+        ("pair.png", stereo::encode_png(&e, &m).unwrap(), Stereo::SideBySide { first: Eye::Left, half: false }),
+        // a JPS without a descriptor is cross-eyed side by side; a JPEG is one picture
+        ("bare.jps", encode_jpeg(&e, 90, ChromaSubsampling::S444, &m).unwrap(), cross),
+        ("bare.jpg", encode_jpeg(&e, 80, ChromaSubsampling::S444, &m).unwrap(), Stereo::Mono),
+    ];
+    let src = temp_dir("stereo-layouts");
+    for (name, bytes, want) in &files {
+        std::fs::write(src.join(name), bytes).unwrap();
+        assert_eq!(crate::files::probe_bytes(name, bytes).unwrap().stereo, Some(*want), "{name}");
+    }
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), files.len(), "{r}");
+    for (name, _, want) in &files {
+        let p = s.catalog.photos().find(|p| p.file_name == *name).unwrap();
+        assert_eq!((p.stereo, p.is_stereo()), (Some(*want), *want != Stereo::Mono), "{name}");
+    }
+    // query results keep `stereo` a yes or no and say the layout
+    let q = s.execute("catalog.query", &json!({"filter": {"stereo": true}})).unwrap();
+    assert_eq!(q["total"], 4, "{q}");
+    let jps = q["photos"].as_array().unwrap().iter().find(|p| p["fileName"] == "pair.jps").cloned().unwrap_or_default();
+    assert_eq!((&jps["stereo"], &jps["stereoLayout"]), (&json!(true), &json!({"layout": "sideBySide", "first": "right", "half": false})), "{q}");
+    let flat = s.execute("catalog.query", &json!({"filter": {"stereo": false}})).unwrap();
+    assert_eq!((&flat["photos"][0]["stereo"], &flat["photos"][0]["stereoLayout"]), (&json!(false), &Value::Null), "{flat}");
     let _ = std::fs::remove_dir_all(&src);
 }
 

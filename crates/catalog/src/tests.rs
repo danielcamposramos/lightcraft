@@ -561,14 +561,14 @@ fn set_stereo_is_undoable_journaled_and_checked() {
     let p = Photo::new(a, Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 4000, 3000, "2026-10-06T00:00:00");
     c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     assert_eq!(c.photo(a).unwrap().stereo, None);
-    let op = Op::SetStereo { id: a, stereo: Some(true) };
+    let op = Op::SetStereo { id: a, stereo: Some(Stereo::Heif) };
     let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
     let inv = c.apply(op).unwrap();
-    assert_eq!(c.photo(a).unwrap().stereo, Some(true));
+    assert_eq!(c.photo(a).unwrap().stereo, Some(Stereo::Heif));
     let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
     c.apply(inv).unwrap();
     assert_eq!(c.photo(a).unwrap().stereo, None);
-    assert!(c.apply(Op::SetStereo { id: PhotoId(999), stereo: Some(false) }).is_err());
+    assert!(c.apply(Op::SetStereo { id: PhotoId(999), stereo: Some(Stereo::Mono) }).is_err());
     assert_eq!(c.photo(a).unwrap().stereo, None);
 }
 
@@ -581,11 +581,33 @@ fn photo_stereo_serde_is_backward_compatible() {
     assert!(v.get("stereo").is_none());
     let old: Photo = serde_json::from_value(v.clone()).unwrap();
     assert_eq!(old.stereo, None);
-    p.stereo = Some(false);
+    p.stereo = Some(Stereo::Mono);
     v = serde_json::to_value(&p).unwrap();
-    assert_eq!(v.get("stereo"), Some(&serde_json::json!(false)));
+    assert_eq!(v.get("stereo"), Some(&serde_json::json!({"layout": "mono"})));
     let back: Photo = serde_json::from_value(v).unwrap();
-    assert_eq!(back.stereo, Some(false));
+    assert_eq!(back.stereo, Some(Stereo::Mono));
+}
+
+/// Every layout the stereo formats define keeps its name and eyes through the catalog's JSON.
+#[test]
+fn stereo_layouts_round_trip() {
+    use serde_json::json;
+    let cases = [
+        (Stereo::Mono, json!({"layout": "mono"})),
+        (Stereo::Heif, json!({"layout": "heif"})),
+        (Stereo::Mpo, json!({"layout": "mpo"})),
+        (Stereo::SideBySide { first: Eye::Right, half: false }, json!({"layout": "sideBySide", "first": "right", "half": false})),
+        (Stereo::OverUnder { first: Eye::Left, half: true }, json!({"layout": "overUnder", "first": "left", "half": true})),
+        (Stereo::Rows { first: Eye::Left }, json!({"layout": "rows", "first": "left"})),
+        (Stereo::Anaglyph { red: Eye::Right }, json!({"layout": "anaglyph", "red": "right"})),
+    ];
+    for (stereo, value) in cases {
+        assert_eq!(serde_json::to_value(stereo).unwrap(), value);
+        assert_eq!(serde_json::from_value::<Stereo>(value).unwrap(), stereo);
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "/x.mpo".into() }, "x.mpo", "MPO", 40, 30, "2026-10-06T00:00:00");
+        p.stereo = Some(stereo);
+        assert_eq!(p.is_stereo(), stereo != Stereo::Mono, "{stereo:?}");
+    }
 }
 
 /// A saved smart album whose rules no longer check (the album a rule tests was deleted) is found,
@@ -913,18 +935,20 @@ fn stereo_filter_tokens_and_describe() {
     let yes = photo(&mut c, "a.heic", "2026-04-01T10:00:00");
     let no = photo(&mut c, "b.heic", "2026-04-02T10:00:00");
     let unknown = photo(&mut c, "c.heic", "2026-04-03T10:00:00");
-    c.apply(Op::SetStereo { id: yes, stereo: Some(true) }).unwrap();
-    c.apply(Op::SetStereo { id: no, stereo: Some(false) }).unwrap();
+    let jps = photo(&mut c, "d.jps", "2026-04-04T10:00:00");
+    c.apply(Op::SetStereo { id: yes, stereo: Some(Stereo::Heif) }).unwrap();
+    c.apply(Op::SetStereo { id: no, stereo: Some(Stereo::Mono) }).unwrap();
+    c.apply(Op::SetStereo { id: jps, stereo: Some(Stereo::SideBySide { first: Eye::Right, half: false }) }).unwrap();
     let q = |f: Filter| {
         let mut v = c.query(&f, &Sort::default());
         v.sort();
         v
     };
-    assert_eq!(q(Filter { stereo: Some(true), ..Default::default() }), vec![yes]);
+    assert_eq!(q(Filter { stereo: Some(true), ..Default::default() }), vec![yes, jps]);
     assert_eq!(q(Filter { stereo: Some(false), ..Default::default() }), vec![no, unknown]);
-    assert_eq!(q(Filter::default()), vec![yes, no, unknown]);
+    assert_eq!(q(Filter::default()), vec![yes, no, unknown, jps]);
     for key in ["stereo", "spatial"] {
-        assert_eq!(q(Filter { text: format!("{key}:yes"), ..Default::default() }), vec![yes]);
+        assert_eq!(q(Filter { text: format!("{key}:yes"), ..Default::default() }), vec![yes, jps]);
         assert_eq!(q(Filter { text: format!("{key}:no"), ..Default::default() }), vec![no, unknown]);
     }
     let old: Filter = serde_json::from_str(r#"{"rating":3}"#).unwrap();

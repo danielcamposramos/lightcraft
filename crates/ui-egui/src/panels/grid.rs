@@ -718,7 +718,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
             right -= 20.0;
         }
-        if photo.stereo == Some(true) {
+        if photo.is_stereo() {
             // a spatial photo (stereo pair): a cube next to the edited icon, named on hover
             let br = Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0));
             paint(p, br, Icon::Cube, t.text_label);

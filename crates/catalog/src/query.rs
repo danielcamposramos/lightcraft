@@ -173,7 +173,7 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
             "edited" => (val == "true" || val == "yes") == p.is_edited(),
-            "stereo" | "spatial" => (val == "true" || val == "yes") == (p.stereo == Some(true)),
+            "stereo" | "spatial" => (val == "true" || val == "yes") == p.is_stereo(),
             "date" => p.captured.as_deref().is_some_and(|c| c.starts_with(val)),
             "copy" | "virtual" => (val == "true" || val == "yes") == p.copy_of.is_some(),
             "name" | "file" => p.file_name.to_lowercase().contains(val),
@@ -324,7 +324,7 @@ impl Filter {
         if self.edited.is_some_and(|e| e != p.is_edited()) {
             return false;
         }
-        if self.stereo.is_some_and(|s| s != (p.stereo == Some(true))) {
+        if self.stereo.is_some_and(|s| s != p.is_stereo()) {
             return false;
         }
         if let Some(rs) = &self.rule_set

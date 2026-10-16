@@ -1,6 +1,6 @@
 # File format parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (HEIC / HEIF stereo pairs, spatial photos, detected and filterable, #446) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-16 · **Change:** minor (stereo pairs in MPO, JPS and PNG `sTER` detected like HEIC ones, #446) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
 
 Every format Lightroom reads or writes, with our support, fidelity and tests. Camera raw formats are
 deep enough to have their own document: [raw-parity.md](raw-parity.md).
@@ -24,6 +24,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests_export.rs` |
 | WebP | not in its document types | ⬜ | ✅ | ✅ | beyond target |
 | GIF, BMP | ⬜ | ⬜ | ✅ | ⬜ | beyond target |
+| MPO, JPS, PNG with `sTER` (stereo pairs) | ⬜ | ⬜ | 🟡 the stereo layout is read from the headers at import and on Reload from Disk (`Photo.stereo`: MPO, JPS side by side, over/under, interleaved or anaglyph, `sTER` mode 0 or 1), shown as Spatial, filterable and searchable like a HEIC stereo pair; opened as the first image (MPO) or the packed picture (JPS, `sTER`) | ⬜ | `crates/codecs/src/stereo.rs` (CIPA DC-007-2009, the VRex JPS descriptor, PNG Extensions 1.4.0 §3.6), `crates/engine/src/tests_import.rs`; beyond target |
 | DNG (from raw) | ✅ | ✅ incl. lossy, embedded original | ✅ | ✅ uncompressed, LJ92, Deflate or lossy (JPEG tiles, optional long edge); ⬜ embedded original | `crates/raw/src/dngwrite.rs` |
 | Render to DNG (15.5) | — | ✅ | — | 🟡 export format "Rendered DNG" (linear float DNG, edit baked in); not yet added to the catalog | `crates/raw/src/dngwrite.rs` (`write_rendered_dng`) |
 | Original + sidecar | — | ✅ | — | ✅ | |
@@ -82,3 +83,4 @@ Remaining: **26–47 h** (AVIF decode 8–15 h if a permissive decoder is writte
 | 2026-10-12 | minor | Lossy DNG export (JPEG tiles, `dngCompression: "lossy"`); PSD write had already landed (#953), so it leaves the remaining hours |
 | 2026-10-13 | patch | JPEG write (#1373): Huffman tables made for each image, 12–14 % smaller files at the same pixels; statuses unchanged |
 | 2026-10-13 | minor | HEIC / HEIF: stereo pairs (spatial photos) detected from the container, shown as Spatial, filterable and searchable (#446); statuses unchanged |
+| 2026-10-16 | minor | MPO, JPS and PNG `sTER`: stereo pairs detected from their headers like HEIC ones, `Photo.stereo` records each file's layout (#446); new row |
