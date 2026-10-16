@@ -849,7 +849,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
                     ui.label(egui::RichText::new(p.format.to_uppercase()).size(10.5).color(t.text_label));
                 });
-                if p.stereo == Some(true) {
+                if p.is_stereo() {
                     // an icon, not a word: the row stays the same width in every language
                     let (rect, r) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
                     paint(ui.painter(), rect, Icon::Cube, t.text_label);

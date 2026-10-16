@@ -66,6 +66,44 @@ impl Flag {
     }
 }
 
+/// How a photo's file holds a stereo pair (a left and a right eye), as the file declares it
+/// ([`Photo::stereo`]). The photo shown and edited in 2D is the left eye, except for HEIF, whose
+/// primary image is the photo; the edits apply to both eyes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "layout")]
+pub enum Stereo {
+    /// One picture: the file declares no stereo pair.
+    Mono,
+    /// A HEIF stereo pair entity group (`ster`, ISO/IEC 23008-12:2025 §6.8.5, or `stem`, Amd. 1:2025
+    /// §6.8.11): the eyes are two image items besides the primary image (a phone's spatial photo).
+    Heif,
+    /// An MPO (CIPA DC-007-2009): two Disparity images, the left eye at the lower MP Individual
+    /// Image Number (§6.2.2.2).
+    Mpo,
+    /// Both eyes side by side in one picture (JPS, PNG `sTER`), `first` on the left; `half`: each
+    /// eye stored at half its width.
+    #[serde(rename_all = "camelCase")]
+    SideBySide { first: Eye, half: bool },
+    /// Both eyes one above the other (JPS), `first` on top; `half`: each at half its height.
+    #[serde(rename_all = "camelCase")]
+    OverUnder { first: Eye, half: bool },
+    /// Rows alternating between the eyes (JPS interleaved), `first` in the top row.
+    #[serde(rename_all = "camelCase")]
+    Rows { first: Eye },
+    /// One picture of both eyes in complementary colours (JPS anaglyph): `red` is the eye of the red
+    /// channel, green and blue are the other's.
+    #[serde(rename_all = "camelCase")]
+    Anaglyph { red: Eye },
+}
+
+/// One of a stereo pair's two eyes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Eye {
+    Left,
+    Right,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ColorLabel {
@@ -270,10 +308,11 @@ pub struct Photo {
     /// Raw files: the camera's as-shot white balance (Kelvin, tint).
     #[serde(default)]
     pub as_shot_wb: Option<(f64, f64)>,
-    /// Whether the file holds a stereo pair (the HEIF `ster`/`stem` entity group, as in a phone's spatial photos).
-    /// `None` = not checked yet (photos imported before this field existed). Shown as "Spatial" in the UI.
+    /// Whether the file holds a stereo pair and how ([`Stereo`]): the HEIF `ster`/`stem` entity group of a phone's
+    /// spatial photos, an MPO, a JPS or a PNG with `sTER`. `None` = not checked yet (photos imported before this field
+    /// existed). Shown as "Spatial" in the UI ([`Photo::is_stereo`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stereo: Option<bool>,
+    pub stereo: Option<Stereo>,
     /// Hash of the file's bytes (hex), for duplicate detection and preview-cache keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
@@ -501,6 +540,10 @@ impl Photo {
     /// In the library: not deleted and not only browsed (Local).
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
+    }
+    /// The file holds a stereo pair ([`Photo::stereo`]); a photo not checked yet does not count.
+    pub fn is_stereo(&self) -> bool {
+        self.stereo.is_some_and(|s| s != Stereo::Mono)
     }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {

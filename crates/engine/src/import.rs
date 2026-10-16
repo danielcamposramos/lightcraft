@@ -36,7 +36,8 @@ use crate::media::ProbeInfo;
 /// This includes preview-only raws; the file probe decides whether sensor decoding is available.
 pub const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "png", "tif", "tiff", "webp", "dng", "cr2", "cr3", "nef", "nrw", "arw", "sr2", "srf", "raf", "orf", "rw2", "rwl", "raw", "pef",
-    "srw", "psd", "jxl", "gif", "bmp",
+    "srw", "psd", "jxl", "gif", "bmp", // stereo pairs: MPO (CIPA DC-007) and JPS, besides PNG with `sTER`
+    "mpo", "jps",
     // Decoded when built with the codecs' `heif` feature; otherwise the import reports them as
     // failed with the reason ("HEIC/HEIF support isn't included in this build").
     "heic", "heif", "avif", // no AV1 decoder yet: reported as failed, like a HEIC without the feature

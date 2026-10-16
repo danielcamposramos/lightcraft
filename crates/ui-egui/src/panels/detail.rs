@@ -2933,7 +2933,7 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
     let edited = ph.is_edited();
-    let stereo = ph.stereo == Some(true);
+    let stereo = ph.is_stereo();
     if ph.rating == 0 && ph.flag == Flag::None && !edited && !stereo {
         return;
     }
