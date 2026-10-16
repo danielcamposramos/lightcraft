@@ -97,6 +97,50 @@ pub struct SourceInfo {
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+    /// A stereo photo's eyes, decoded with the picture (HEIF stereo pairs, MPO, JPS, PNG `sTER`).
+    /// The pipeline renders one picture: `lightcraft-engine` develops each eye with the photo's
+    /// settings when a render asks for both.
+    pub stereo: Option<StereoEyes>,
+}
+
+/// The two eyes of a stereo photo, the same size. `left` is `None` when the picture itself is the
+/// left eye (MPO, JPS, PNG `sTER`), and set when the picture is another image (a HEIF's primary
+/// image). Eyes compare by identity, like the pictures the stage caches key on.
+#[derive(Clone)]
+pub struct StereoEyes {
+    pub left: Option<Arc<Rgb32f>>,
+    pub right: Arc<Rgb32f>,
+    /// Long edge (px) of the eyes in the file; see [`SourceInfo::native_long`].
+    pub native_long: usize,
+}
+
+impl StereoEyes {
+    /// Bytes held by the eyes besides the picture.
+    pub fn bytes(&self) -> usize {
+        let px = |i: &Rgb32f| i.data.len().saturating_mul(12);
+        px(&self.right).saturating_add(self.left.as_deref().map_or(0, px))
+    }
+}
+
+impl PartialEq for StereoEyes {
+    fn eq(&self, o: &Self) -> bool {
+        let same = |a: &Option<Arc<Rgb32f>>, b: &Option<Arc<Rgb32f>>| match (a, b) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        Arc::ptr_eq(&self.right, &o.right) && same(&self.left, &o.left) && self.native_long == o.native_long
+    }
+}
+
+impl std::fmt::Debug for StereoEyes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let size = |i: &Rgb32f| (i.width, i.height);
+        f.debug_struct("StereoEyes")
+            .field("left", &self.left.as_deref().map(size))
+            .field("right", &size(&self.right))
+            .field("native_long", &self.native_long)
+            .finish()
+    }
 }
 
 impl Default for SourceInfo {
@@ -113,6 +157,7 @@ impl Default for SourceInfo {
             mattes: None,
             local_tone: None,
             native_long: None,
+            stereo: None,
         }
     }
 }

@@ -917,6 +917,9 @@ pub struct UiState {
     pub point_color_visualize: bool,
     /// Light panel "Visualize HDR": grey below SDR white, colour bands above (HDR edits).
     pub hdr_visualize: bool,
+    /// View ▸ Stereo View: the loupe shows a stereo photo's two eyes side by side, the left eye on
+    /// the left (where tools and overlays work); off, it shows the photo alone.
+    pub stereo_view: bool,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
     pub eye_pet: bool,
@@ -1455,6 +1458,7 @@ impl Default for UiState {
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,
+            stereo_view: false,
             eye: 0,
             eye_pet: false,
             visualize_spots: false,

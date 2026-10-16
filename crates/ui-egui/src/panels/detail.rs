@@ -512,6 +512,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         _ => vec![area],
     };
     let main_area = *areas.last().unwrap_or(&area);
+    // View ▸ Stereo View on a stereo photo: both eyes side by side, twice as wide (one view, not the
+    // before/after comparisons). Tools and overlays work on the left eye, the photo the edits are
+    // made on; the right eye follows the same settings.
+    let pair = app.ui.stereo_view && photo.is_stereo() && !split && !split_view && app.ui.before_after != BeforeAfter::Original;
     let visible_texture_aspect = app
         .renderer
         .textures
@@ -523,18 +527,26 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // Follow the texture only where it really differs (an unsupported raw's embedded JPEG with
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
     // tool's overlays need the frame's own geometry.
-    let display_aspect = visible_texture_aspect.filter(|a| !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
+    let display_aspect = visible_texture_aspect.filter(|a| !pair && !crop_tool && (a / aspect - 1.0).abs() > 0.02).unwrap_or(aspect);
     let resp = ui.interact(canvas, egui::Id::new("loupe"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Photo"));
-    let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
-    let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
+    // (a pair is laid out whole; the pan point is a point of the left eye, where gestures measure it)
+    let fit = |zoom: Zoom, pan: (f32, f32)| match pair {
+        true => fit_rect(main_area, display_aspect * 2.0, zoom, [native[0] * 2, native[1]], ppp, (pan.0 / 2.0, pan.1)),
+        false => fit_rect(main_area, display_aspect, zoom, native, ppp, pan),
+    };
+    let left_eye = |r: Rect| if pair { Rect::from_min_max(r.min, pos2(r.center().x, r.bottom())) } else { r };
+    let mut pair_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, fit(app.ui.zoom, app.ui.pan));
+    let mut target_rect = left_eye(fit(app.ui.zoom, app.ui.pan));
+    let mut img_rect = left_eye(pair_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
     let mut navigating = false;
     for &view_area in &areas {
         let view_img = in_pane(view_area, img_rect);
         if navigate_gesture(app, ui, &resp, view_area, view_img, native) {
             navigating = true;
-            target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
+            pair_rect = fit(app.ui.zoom, app.ui.pan);
+            target_rect = left_eye(pair_rect);
             img_rect = target_rect;
             break;
         }
@@ -600,6 +612,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let floor = lightcraft_engine::SourceLevel::Preview.max_edge().min(limit).min(native_long);
         plan.main_edge.max(floor).min(texture_side.max(crate::state::MIN_TEXTURE_SIDE))
     };
+    // (both eyes of a pair go in one texture)
+    let want = if pair { want.min(texture_side / 2) } else { want };
     // The short side is rounded, not truncated: a truncated box (2560 x 1706 for a 2560 x 1707
     // source) made the render a slightly anisotropic resample of its source, a 2-tap blur along
     // one axis only. A box that matches the source to rounding is rendered at exactly its size.
@@ -613,7 +627,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         // at rest the render is shrunk to exactly the size it is drawn at with a Lanczos filter on
         // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
         // sampling (the render is up to a 64 px step larger, or the preview level)
-        let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        // (a pair renders two eyes wide: the box is two eyes wide too)
+        let job = if interacting { job } else { job.with_display_fit(fit_px[0] * if pair { 2 } else { 1 }, fit_px[1]) };
+        let job = if pair { job.with_stereo() } else { job };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         app.renderer.request(Slot::Main, job, 100);
@@ -678,7 +694,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // zoomed past what the whole-frame render holds: also render the part on screen, at no more
     // than 100 % (the GPU magnifies beyond that), for each side that is shown. Mask overlays and
     // soft proofing use the same window; diagnostic overlays that need whole-frame context do not.
-    let windowable_view = hover_key.is_none() && overlay_supports_window(overlay) && crate::region::same_aspect(display_aspect, aspect);
+    let windowable_view = !pair && hover_key.is_none() && overlay_supports_window(overlay) && crate::region::same_aspect(display_aspect, aspect);
     let window_ctx = WindowCtx {
         id,
         overlay,
@@ -740,6 +756,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         } else {
             return "none";
         };
+        // a pair spans both eyes' place; a one-eye stand-in (cached render, thumbnail) the left eye's
+        let r = if pair && r == img_rect && tex.size[0] as f32 >= 1.5 * aspect * tex.size[1] as f32 { pair_rect } else { r };
         let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
         p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         what

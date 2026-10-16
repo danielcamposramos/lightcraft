@@ -30,6 +30,11 @@ pub enum ExportFormat {
     Dng,
     /// Render to DNG: a linear DNG (16-bit float) of the rendered photo, the edit baked in.
     RenderedDng,
+    /// A stereo photo's two eyes as an MPO (CIPA DC-007): two JPEGs, the left eye first.
+    Mpo,
+    /// A stereo photo's two eyes as a JPS: one JPEG, cross-eyed side by side, with a VRex
+    /// stereoscopic descriptor saying so.
+    Jps,
 }
 
 impl ExportFormat {
@@ -45,6 +50,8 @@ impl ExportFormat {
             "original" => Self::Original,
             "dng" => Self::Dng,
             "rendereddng" | "renderdng" | "render-dng" | "lineardng" => Self::RenderedDng,
+            "mpo" => Self::Mpo,
+            "jps" => Self::Jps,
             _ => return None,
         })
     }
@@ -60,7 +67,14 @@ impl ExportFormat {
             // the original keeps its own extension (see `ExportOptions::file_name_for`)
             Self::Original => "",
             Self::Dng | Self::RenderedDng => "dng",
+            Self::Mpo => "mpo",
+            Self::Jps => "jps",
         }
+    }
+
+    /// Formats that hold a stereo pair as its two eyes (stereo photos only).
+    pub fn is_stereo(self) -> bool {
+        matches!(self, Self::Mpo | Self::Jps)
     }
 
     /// Formats that render pixels (everything but `Original` and `Dng`).
@@ -676,6 +690,10 @@ pub struct ExportOptions {
     pub photos_album: String,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
+    /// Stereo photos (a spatial HEIC, an MPO, a JPS, a PNG with `sTER`): both eyes full side by
+    /// side, the left eye first, instead of the photo alone; a PNG then carries `sTER`. MPO and JPS
+    /// always hold both eyes.
+    pub both_eyes: bool,
 }
 
 impl Default for ExportOptions {
@@ -707,6 +725,7 @@ impl Default for ExportOptions {
             add_to_photos: false,
             photos_album: String::new(),
             hdr_transfer: HdrCurve::Pq,
+            both_eyes: false,
         }
     }
 }
@@ -751,6 +770,7 @@ pub const OPTION_PARAMS: &[&str] = &[
     "addToPhotos",
     "photosAlbum",
     "hdrTransfer",
+    "bothEyes",
 ];
 
 /// Why an export can't add its files to Apple Photos on this platform (`None`: it can, when the
@@ -954,7 +974,7 @@ impl ExportOptions {
                     }
                     serde_json::from_value::<Resize>(v.clone()).map_err(|e| bad(format!("`{k}`: {e}")))?;
                 }
-                "dontEnlarge" | "removeLocation" | "background" | "hdr" | "jxlLossless" | "jxlProgressive" => {
+                "dontEnlarge" | "removeLocation" | "background" | "hdr" | "jxlLossless" | "jxlProgressive" | "bothEyes" => {
                     boolean(k, v)?;
                 }
                 "addToPhotos" => {
@@ -1128,6 +1148,7 @@ impl ExportOptions {
             add_to_photos: p.get("addToPhotos").and_then(Value::as_bool).unwrap_or(d.add_to_photos),
             photos_album: s("photosAlbum").map_or(d.photos_album, |a| a.trim().to_string()),
             hdr_transfer: s("hdrTransfer").and_then(HdrCurve::parse).unwrap_or(d.hdr_transfer),
+            both_eyes: p.get("bothEyes").and_then(Value::as_bool).unwrap_or(d.both_eyes),
         }
     }
 
@@ -1196,7 +1217,9 @@ impl ExportOptions {
     /// The sample format the file is written with (unsupported requests fall back to the closest).
     pub fn effective_depth(&self) -> OutputDepth {
         match (self.format, self.bit_depth) {
-            (ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng, _) => OutputDepth::U8,
+            (ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng | ExportFormat::Mpo | ExportFormat::Jps, _) => {
+                OutputDepth::U8
+            }
             (ExportFormat::Png, _) if self.hdr => OutputDepth::F32Hdr,
             (ExportFormat::Png, Some(16 | 32)) => OutputDepth::U16,
             (ExportFormat::Png, _) => OutputDepth::U8,
@@ -1220,7 +1243,9 @@ impl ExportOptions {
     /// The bit depths `format` offers (value, label); the first is its default.
     pub fn bit_depths(format: ExportFormat) -> &'static [(u8, &'static str)] {
         match format {
-            ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng => &[(8, "8-bit")],
+            ExportFormat::Jpeg | ExportFormat::Webp | ExportFormat::Original | ExportFormat::Dng | ExportFormat::Mpo | ExportFormat::Jps => {
+                &[(8, "8-bit")]
+            }
             ExportFormat::Png => &[(8, "8-bit"), (16, "16-bit")],
             ExportFormat::Tiff => &[(16, "16-bit"), (8, "8-bit"), (32, "32-bit float")],
             ExportFormat::Psd => &[(16, "16-bit"), (8, "8-bit")],
@@ -1373,7 +1398,11 @@ pub fn encode_image(img: &Rgba8, o: &ExportOptions) -> Result<Vec<u8>, String> {
 
 /// Like [`encode_image`], embedding `meta` (already filtered by the policy) as EXIF + XMP.
 pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
-    let img = finish_8bit(img, o);
+    encode_finished(&finish_8bit(img, o), o, meta, false)
+}
+
+/// Encode finished 8-bit pixels; `stereo`: `img` is a stereo pair, full side by side, left eye first.
+fn encode_finished(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>, stereo: bool) -> Result<Vec<u8>, String> {
     let space = o.effective_space();
     let profile = icc::write_named(named_space(space));
     let exif = meta.map(lightcraft_meta::write_exif);
@@ -1416,12 +1445,17 @@ pub fn encode_with_metadata(img: &Rgba8, o: &ExportOptions, meta: Option<&Metada
                 None => jpeg(o.quality),
             }
         }
+        // a stereo pair: PNG carries `sTER`, MPO and JPS hold the two eyes
+        ExportFormat::Png if stereo => lightcraft_codecs::stereo::encode_png(&e, &meta),
         ExportFormat::Png => encode::encode_png(&e, &meta),
         ExportFormat::Tiff => encode::encode_tiff(&e, o.tiff_compression, &meta),
         ExportFormat::Psd => encode::encode_psd(&e, &meta),
         ExportFormat::Webp => encode::encode_webp_lossless(&e, &meta),
         ExportFormat::Avif => encode::encode_avif(&e, o.quality, 8, &meta),
         ExportFormat::Jxl => lightcraft_codecs::encode_jxl(&e, &o.jxl(space, false), &meta),
+        ExportFormat::Mpo if stereo => lightcraft_codecs::stereo::encode_mpo(&e, o.quality, ChromaSubsampling::S444, &meta),
+        ExportFormat::Jps if stereo => lightcraft_codecs::stereo::encode_jps(&e, o.quality, ChromaSubsampling::S444, &meta),
+        f @ (ExportFormat::Mpo | ExportFormat::Jps) => return Err(format!("{f:?} export needs a stereo photo")),
         f @ (ExportFormat::Original | ExportFormat::Dng) => return Err(format!("{f:?} export does not encode pixels")),
         ExportFormat::RenderedDng => return Err("Render to DNG needs a float render".into()),
     };
@@ -1512,10 +1546,32 @@ pub fn encode_rendered(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, met
     }
 }
 
+/// Encode a stereo render (both eyes full side by side, the left eye in the left half): output
+/// sharpening and the watermark go into each eye on its own (the same in both), then MPO and JPS
+/// write the two eyes, PNG adds `sTER`, and the other formats keep the side-by-side picture.
+pub fn encode_stereo(r: &lightcraft_pipeline::Rendered, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    match &r.deep {
+        Some(d) if o.effective_depth() != OutputDepth::U8 => {
+            let (left, right) = crate::stereo::deep_halves(d).ok_or("stereo render: the eyes don't fit side by side")?;
+            let pair =
+                crate::stereo::deep_side_by_side(&finish_deep(&left, o), &finish_deep(&right, o)).ok_or("stereo render: eyes of different sizes")?;
+            encode_deep_finished(&pair, o, meta, true)
+        }
+        _ => {
+            let (left, right) = crate::stereo::halves(&r.image);
+            encode_finished(&crate::stereo::side_by_side(&finish_8bit(&left, o), &finish_8bit(&right, o)), o, meta, true)
+        }
+    }
+}
+
 /// Encode a high-bit-depth image (see [`encode_rendered`]).
 pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) -> Result<Vec<u8>, String> {
+    encode_deep_finished(&finish_deep(img, o), o, meta, false)
+}
+
+/// Encode a finished high-bit-depth image; `stereo`: a stereo pair, full side by side, left eye first.
+fn encode_deep_finished(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>, stereo: bool) -> Result<Vec<u8>, String> {
     let meta_src = meta;
-    let img = finish_deep(img, o);
     let profile = match img.samples {
         DeepSamples::F32(_) => icc::write_matrix_trc(&img.space.rgb_space(), &lightcraft_codecs::Trc::Linear),
         DeepSamples::U16(_) => icc::write_named(named_space(img.space)),
@@ -1529,6 +1585,10 @@ pub fn encode_deep(img: &DeepImage, o: &ExportOptions, meta: Option<&Metadata>) 
         DeepSamples::F32(v) => EncodeImage::new(w, h, 3, Samples::F32(v)),
     };
     let r = match (o.format, &img.samples) {
+        (ExportFormat::Png, DeepSamples::U16(_)) if stereo => lightcraft_codecs::stereo::encode_png(&e, &meta),
+        (ExportFormat::Png, DeepSamples::F32(_)) if stereo => {
+            return Err("an HDR PNG can't hold both eyes yet: export them as 8- or 16-bit PNG".into());
+        }
         (ExportFormat::Png, DeepSamples::F32(v)) if img.space == OutputSpace::Rec2020 => lightcraft_codecs::encode_png_pq(w, h, v, &meta),
         (ExportFormat::Png, _) => encode::encode_png(&e, &meta),
         (ExportFormat::Tiff, _) => encode::encode_tiff(&e, o.tiff_compression, &meta),
@@ -1661,6 +1721,8 @@ struct RenderWork {
     hdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
+    /// A stereo photo's two eyes: `job` renders them side by side.
+    stereo: bool,
 }
 
 enum Work {
@@ -1720,19 +1782,25 @@ fn prepare_guarded(
     };
     let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
     let (work, weight) = if o.format.is_rendered() {
+        if o.format.is_stereo() && !p.is_stereo() {
+            return Err(format!("{}: {:?} export needs a stereo photo (a spatial HEIC, an MPO, a JPS or a PNG with sTER)", p.file_name, o.format));
+        }
+        // both eyes, each at the chosen size (a gain map JPEG is not made of a pair: the eyes are SDR)
+        let stereo = p.is_stereo() && (o.format.is_stereo() || o.both_eyes);
         let (w, h) = output_size(p, o);
         let (nw, nh) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &p.develop);
         let native_px = (nw.round().max(1.0) * nh.round().max(1.0)) as usize;
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
-        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
+        let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg && !stereo;
         let job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
-        let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
+        let job = if stereo { job.with_stereo() } else { job };
+        let weight = render_weight(full_px, long, job.level, w.saturating_mul(h)).saturating_mul(if stereo { 2 } else { 1 });
         if let Some(why) = too_big_for_memory((w, h), native_px, weight, crate::memory::total_ram()) {
             return Err(format!("{label}: {why}"));
         }
         let hdr_job = if gain_map { Some(session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?) } else { None };
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), stereo })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -1806,7 +1874,7 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, hdr_job, meta, opts } = *w;
+                let RenderWork { job, hdr_job, meta, opts, stereo } = *w;
                 let result = job.run();
                 let r = result.rendered?;
                 let gpu_fallback = result.gpu_fallback;
@@ -1816,6 +1884,7 @@ impl PreparedExport {
                         let hdr = hr.deep.ok_or("the HDR render has no float samples")?;
                         encode_gain_map_jpeg(&r.image, &hdr, &opts, meta.as_ref())?
                     }
+                    None if stereo => encode_stereo(&r, &opts, meta.as_ref())?,
                     None => encode_rendered(&r, &opts, meta.as_ref())?,
                 };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })

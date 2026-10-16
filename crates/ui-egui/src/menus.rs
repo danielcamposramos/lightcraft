@@ -113,6 +113,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
     ("view.clipping", "Show Clipping", Some("J"), "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
+    // a stereo photo (spatial HEIC, MPO, JPS, PNG sTER) in the loupe: both eyes side by side
+    ("view.stereo", "Stereo View", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
     ("view.histogram", "Histogram", Some("Cmd+Shift+H"), "View"),
@@ -978,6 +980,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).
             app.ui.hdr_visualize = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.hdr_visualize);
             Ok(json!({"on": app.ui.hdr_visualize}))
+        }
+        "view.stereo" => {
+            // {on?}; no params toggles. Shown on stereo photos (`Photo::is_stereo`).
+            app.ui.stereo_view = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.stereo_view);
+            Ok(json!({"on": app.ui.stereo_view}))
         }
         "view.softProof" => {
             // {on?, space?, profile?: ICC path | null, intent?: perceptual|relative, paperInk?,
@@ -2248,6 +2255,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "dialog.saveMaskEffect" => app.session.active().is_some() && app.session.active_mask.is_some(),
         "file.exportCurvePresets" => !app.session.curve_presets.is_empty(),
         "view.compare" => app.session.catalog.len() > 1,
+        "view.stereo" => app.session.active().and_then(|id| app.session.catalog.photo(id)).is_some_and(|p| p.is_stereo()),
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),
         "file.addFolder" => app.services.pick_folder.is_some() && !crate::lightroom_import::is_running(app),
