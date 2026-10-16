@@ -50,6 +50,10 @@ pub struct Spec<'a> {
     /// A stereo pair (a spatial photo): a second image of the same size and samples (the
     /// right eye) and a `grpl` box with a `ster` entity group naming the primary image (left) and it.
     pub stereo: bool,
+    /// A stereo pair apart from the primary image, as phones write their spatial photos: two images
+    /// of this width and height with the left and the right eye's samples, named (left first) by a
+    /// `ster` entity group.
+    pub eyes: Option<(u32, u32, Sampler<'a>, Sampler<'a>)>,
 }
 
 impl<'a> Spec<'a> {
@@ -65,6 +69,7 @@ impl<'a> Spec<'a> {
             thumbnail: None,
             ignored_aux: Vec::new(),
             stereo: false,
+            eyes: None,
         }
     }
 }
@@ -569,6 +574,10 @@ pub fn build(spec: &Spec<'_>) -> Vec<u8> {
         // The right eye: another image of the primary's size (the decoder still picks `pitm`)
         let right = f.image(spec.width, spec.height, spec.bit_depth, false, spec.sample);
         f.groups.push((b"ster", 1000, vec![u32::from(primary), u32::from(right)]));
+    }
+    if let Some((w, h, left, right)) = spec.eyes {
+        let (l, r) = (f.image(w, h, spec.bit_depth, false, left), f.image(w, h, spec.bit_depth, false, right));
+        f.groups.push((b"ster", 1001, vec![u32::from(l), u32::from(r)]));
     }
     f.write(primary)
 }

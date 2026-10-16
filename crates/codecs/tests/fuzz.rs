@@ -38,6 +38,9 @@ fn try_all(bytes: &[u8]) {
     let _ = lightcraft_codecs::icc::parse(bytes);
     let _ = lightcraft_codecs::gainmap::read_jpeg(bytes);
     let _ = lightcraft_codecs::gainmap::is_gain_map_jpeg(bytes);
+    if let Some(l) = lightcraft_codecs::stereo::layout(bytes, true) {
+        let _ = lightcraft_codecs::stereo::decode_pair(bytes, &l, small_opts());
+    }
 }
 
 fn gain_map_jpeg(meta: &EncodeMeta) -> Vec<u8> {
@@ -103,6 +106,9 @@ fn seeds() -> &'static Vec<Vec<u8>> {
             encode_tiff(&EncodeImage::new(24, 16, 3, Samples::F32(&f32s)), TiffCompression::Deflate, &meta).unwrap(),
             encode_webp_lossless(&e, &meta).unwrap(),
             gain_map_jpeg(&meta),
+            lightcraft_codecs::stereo::encode_mpo(&e, 80, ChromaSubsampling::S420, &meta).unwrap(),
+            lightcraft_codecs::stereo::encode_jps(&e, 80, ChromaSubsampling::S420, &meta).unwrap(),
+            lightcraft_codecs::stereo::encode_png(&e, &meta).unwrap(),
         ]
     })
 }
@@ -118,7 +124,7 @@ proptest! {
     }
 
     #[test]
-    fn mutated_valid_files(which in 0usize..7, flips in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..12), cut in any::<prop::sample::Index>()) {
+    fn mutated_valid_files(which in 0usize..10, flips in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..12), cut in any::<prop::sample::Index>()) {
         let mut b = seeds()[which].clone();
         for (i, v) in flips {
             let i = i.index(b.len());

@@ -28,6 +28,8 @@ pub(crate) struct Markers {
     /// The ISO 21496-1 APP2 payload after its URN: 4 bytes (versions only) on a primary image
     /// that has a gain map, the full metadata on the gain map image itself.
     pub iso_gainmap: Option<Vec<u8>>,
+    /// The JPS stereoscopic descriptor of an APP3 `_JPSJPS_` segment (see [`crate::stereo`]).
+    pub jps: Option<u32>,
 }
 
 impl Markers {
@@ -101,6 +103,13 @@ pub(crate) fn parse_markers(b: &[u8]) -> Option<Markers> {
                     && m.iso_gainmap.is_none()
                 {
                     m.iso_gainmap = Some(p.to_vec());
+                }
+            }
+            // VRex stereoscopic descriptor: identifier, block length (≥ 4), 32-bit descriptor,
+            // all most significant byte first
+            0xE3 if seg.starts_with(b"_JPSJPS_") && m.jps.is_none() => {
+                if let Some(d) = seg.get(8..14).filter(|d| u16::from_be_bytes([d[0], d[1]]) >= 4) {
+                    m.jps = Some(u32::from_be_bytes([d[2], d[3], d[4], d[5]]));
                 }
             }
             0xEE if seg.starts_with(b"Adobe") && seg.len() >= 12 => {
