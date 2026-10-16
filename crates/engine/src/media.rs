@@ -232,6 +232,7 @@ impl DecodedSource {
     pub fn bytes(&self) -> usize {
         let mattes = self.info.as_ref().and_then(|i| i.mattes.as_ref()).map_or(0, |m| m.bytes());
         let mattes = mattes + self.info.as_ref().and_then(|i| i.local_tone.as_ref()).map_or(0, |t| t.map.gains.len() * 4);
+        let mattes = mattes + self.info.as_ref().and_then(|i| i.stereo.as_ref()).map_or(0, |e| e.bytes());
         self.image.data.len() * 12 + 64 + std::mem::size_of::<SourceInfo>() + mattes + self.denoised.as_ref().map_or(0, |t| t.bytes())
     }
 
@@ -292,8 +293,18 @@ impl SourceRef {
                 }
                 // Lanczos, not a box average: a box at 2-3:1 halves the contrast of detail near
                 // the output's resolution limit and aliases what is finer
-                let image = lightcraft_raster::resample::fit(&from.image, *max_edge, *max_edge, lightcraft_raster::resample::Filter::Lanczos3);
-                return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
+                let fit = |i: &Rgb32f| lightcraft_raster::resample::fit(i, *max_edge, *max_edge, lightcraft_raster::resample::Filter::Lanczos3);
+                let image = fit(&from.image);
+                // a stereo photo's eyes come along at the same size
+                let info = from.info.clone().map(|info| SourceInfo {
+                    stereo: info.stereo.as_ref().map(|e| lightcraft_pipeline::StereoEyes {
+                        left: e.left.as_deref().map(|l| Arc::new(fit(l))),
+                        right: Arc::new(fit(&e.right)),
+                        native_long: e.native_long,
+                    }),
+                    ..info
+                });
+                return Ok(DecodedSource { image: Arc::new(image), denoised: None, info, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
@@ -789,6 +800,8 @@ pub struct RenderJob {
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
     /// small ratios and aliases it at large ones. The caches keep the full render.
     pub display_fit: Option<(usize, usize)>,
+    /// Render both eyes of a stereo photo side by side ([`Self::with_stereo`]).
+    pub stereo: bool,
 }
 
 /// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
@@ -887,6 +900,21 @@ impl RenderJob {
         let bits = hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i));
         self.key ^= s.hash64() ^ self.settings.hash64() ^ bits.wrapping_mul(0xd6e8_feb8_6659_fd93);
         self.settings = Arc::new(s);
+        self.cache = None;
+        self.view_cache = None;
+        self.preview_cut = None;
+        self
+    }
+
+    /// Render both eyes of a stereo photo ([`crate::stereo`]), each developed with the photo's
+    /// settings, full side by side with the left eye on the left. Gets its own result key and is
+    /// never kept in the thumbnail cache or as the photo's cached preview, which stay its picture.
+    /// The render fails when the photo has no eyes to show.
+    pub fn with_stereo(mut self) -> Self {
+        if !self.stereo {
+            self.key ^= 0x2545_f491_4f6c_dd1d;
+            self.stereo = true;
+        }
         self.cache = None;
         self.view_cache = None;
         self.preview_cut = None;
@@ -1013,11 +1041,25 @@ impl RenderJob {
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
+                if self.stereo && source.info.as_ref().is_none_or(|i| i.stereo.is_none()) {
+                    return self.failed("this photo's two eyes could not be read".into());
+                }
                 let info = source.info_or(self.info);
                 // Thumbnails (many small jobs side by side) stay on the CPU; views and exports use
                 // the GPU when there is one.
                 let gpu = self.cache.is_none();
-                let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                let (mut rendered, gpu_fallback) = match info.stereo.as_ref().filter(|_| self.stereo) {
+                    None => develop_reporting(src, &info, &self.settings, &self.request, self.stages.as_deref(), gpu),
+                    // both eyes with the same settings (the stage caches tell the eyes apart)
+                    Some(eyes) => {
+                        let left = eyes.left.as_ref().unwrap_or(&source.image);
+                        let native_long = (eyes.native_long > left.width.max(left.height)).then_some(eyes.native_long);
+                        let eye_info = SourceInfo { native_long, ..info.clone() };
+                        let (l, fl) = develop_reporting(left, &eye_info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                        let (r, fr) = develop_reporting(&eyes.right, &eye_info, &self.settings, &self.request, self.stages.as_deref(), gpu);
+                        (crate::stereo::compose(l, r), fl.or(fr))
+                    }
+                };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;
@@ -1330,6 +1372,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            stereo: false,
         })
     }
 
@@ -1384,6 +1427,7 @@ impl crate::Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            stereo: false,
         })
     }
 
@@ -1439,6 +1483,7 @@ impl crate::Session {
             slide: None,
             preview_cut,
             display_fit: None,
+            stereo: false,
         })
     }
 

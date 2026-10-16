@@ -818,13 +818,15 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                     let before = opts.format;
                     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
                     let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-                    choices(
-                        ui,
-                        "Format",
-                        "exportFormat",
-                        &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Psd, "PSD"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Jxl, "JPEG XL"), (F::Dng, "DNG"), (F::Original, "Original files")],
-                        &mut shown,
-                    );
+                    // MPO and JPS are offered when stereo photos are exported (a spatial HEIC, an MPO, a JPS, a PNG with sTER)
+                    let stereo = app.session.selection.ids.iter().filter_map(|id| app.session.catalog.photo(*id)).any(|p| p.is_stereo());
+                    let mut formats =
+                        vec![(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Psd, "PSD"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Jxl, "JPEG XL"), (F::Dng, "DNG")];
+                    if stereo || opts.format.is_stereo() {
+                        formats.extend([(F::Mpo, "MPO"), (F::Jps, "JPS")]);
+                    }
+                    formats.push((F::Original, "Original files"));
+                    choices(ui, "Format", "exportFormat", &formats, &mut shown);
                     if shown != opts.format && !(shown == F::Dng && opts.format == F::RenderedDng) {
                         opts.format = shown;
                     }
@@ -838,6 +840,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                             "The original files, unchanged, each with an XMP sidecar holding its edits."
                         };
                         ui.label(egui::RichText::new(note).color(t.text_dim));
+                    }
+                    if opts.format.is_stereo() {
+                        let note = "Stereo photos only: both eyes as an MPO (two JPEGs, the left eye first) or a JPS (one cross-eyed JPEG).";
+                        ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+                    } else if stereo && opts.format.is_rendered() {
+                        let tip = crate::i18n::tr("Stereo photos: both eyes side by side, the left eye first (a PNG also marks them with sTER)");
+                        ui.checkbox(&mut opts.both_eyes, crate::i18n::tr("Both eyes")).on_hover_text(tip);
                     }
                     if opts.format != before {
                         // each format starts at its own default depth (TIFF 16-bit, others 8-bit)

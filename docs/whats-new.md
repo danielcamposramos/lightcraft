@@ -101,6 +101,13 @@
 - Photo Grid and Square Grid now show the grid-cycle shortcut (G by default) in the View menu. The hints follow
   shortcut changes; clicking a menu row still selects that grid (issue #2500).
 
+### Stereo photos
+- Spatial photos from phones (HEIC), MPO files from 3D cameras, JPS and PNG files with `sTER` are recognised: they
+  show a Spatial badge and the filter bar, search (`spatial:yes`) and Info know them (issue #446). Each opens as one
+  photo, edited as its left eye (a spatial HEIC as its usual picture); every edit applies to both eyes.
+- View ▸ Stereo View shows the two eyes side by side, the left eye on the left, where tools and overlays work.
+- Export a stereo photo as MPO or JPS, or tick Both Eyes to get both eyes side by side in the other formats (a
+  PNG also marks them with `sTER`). Sharpening and watermarks go into each eye.
 
 ## 2026-10-21
 
