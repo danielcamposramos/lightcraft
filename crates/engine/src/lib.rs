@@ -76,6 +76,7 @@ pub mod slide_title;
 pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
+pub mod stereo;
 pub mod sync;
 pub mod text;
 mod view;
@@ -1309,6 +1310,8 @@ mod tests_slide;
 mod tests_slideshow_export;
 #[cfg(test)]
 mod tests_spots;
+#[cfg(test)]
+mod tests_stereo;
 #[cfg(test)]
 mod tests_sync;
 #[cfg(test)]

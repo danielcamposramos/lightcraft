@@ -61,6 +61,9 @@ pub struct WireJob {
     /// Render only this window `[x, y, w, h]` of the output `max_w × max_h` describes (a zoomed view).
     #[serde(default)]
     pub window: Option<[usize; 4]>,
+    /// Both eyes of a stereo photo, side by side (`RenderJob::with_stereo`).
+    #[serde(default)]
+    pub stereo: bool,
 }
 
 impl WireJob {
@@ -94,6 +97,7 @@ impl WireJob {
             stages: job.stages.is_some().then(|| view.to_string()),
             overlay: job.request.overlay.to_parts(),
             window: job.request.window.map(|w| [w.x, w.y, w.w, w.h]),
+            stereo: job.stereo,
         }
     }
 
@@ -180,25 +184,34 @@ impl WorkerCore {
             Some(s) => s,
             None => {
                 let src = match (&job.origin, original) {
-                    (Source::File { .. }, Some(bytes)) => {
-                        let (image, info) = lightcraft_engine::files::load_bytes(bytes, job.max_edge)?;
+                    (Source::File { path }, Some(bytes)) => {
+                        let (image, info) = lightcraft_engine::files::load_named(path, bytes, job.max_edge)?;
                         DecodedSource::new(Arc::new(image), Some(info))
                     }
                     (Source::File { path }, None) => return Err(format!("{path}: original not found in browser storage")),
                     (origin @ Source::Demo { .. }, _) => self.media.origin_ref(origin, job.max_edge).load_source()?,
                 };
-                let cost = src.image.width * src.image.height * 12 + 64;
+                let cost = src.image.width * src.image.height * 12 + 64 + src.info.as_ref().and_then(|i| i.stereo.as_ref()).map_or(0, |e| e.bytes());
                 self.sources.insert(key, src.clone(), cost);
                 src
             }
         };
         let info = src.info_or(job.info());
-        let mut rendered = match &job.stages {
-            Some(view) => {
-                let st = self.stages.entry(view.clone()).or_default().clone();
-                lightcraft_engine::pipeline::render_cached(&src.image, &info, &job.settings, &job.request(), &st)
+        let st = job.stages.as_ref().map(|view| self.stages.entry(view.clone()).or_default().clone());
+        let render = |image: &Arc<lightcraft_raster::Rgb32f>, info: &SourceInfo| match &st {
+            Some(st) => lightcraft_engine::pipeline::render_cached(image, info, &job.settings, &job.request(), st),
+            None => lightcraft_engine::pipeline::render(image, info, &job.settings, &job.request()),
+        };
+        let mut rendered = match (job.stereo, &info.stereo) {
+            (false, _) => render(&src.image, &info),
+            // a stereo photo's two eyes, developed with the same settings (as on the desktop)
+            (true, Some(eyes)) => {
+                let left = eyes.left.as_ref().unwrap_or(&src.image);
+                let native_long = (eyes.native_long > left.width.max(left.height)).then_some(eyes.native_long);
+                let eye_info = SourceInfo { native_long, ..info.clone() };
+                lightcraft_engine::stereo::compose(render(left, &eye_info), render(&eyes.right, &eye_info))
             }
-            None => lightcraft_engine::pipeline::render(&src.image, &info, &job.settings, &job.request()),
+            (true, None) => return Err("this photo's two eyes could not be read".into()),
         };
         // an HDR edit's histogram shows its HDR range (as on native)
         if let Some(h) = lightcraft_engine::pipeline::hdr_histogram(&src.image, &info, &job.settings, &job.request()) {
@@ -458,6 +471,48 @@ mod tests {
     }
 
     #[test]
+    fn worker_renders_both_eyes_of_a_stereo_photo() {
+        use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, stereo};
+        let pair = lightcraft_raster::Rgba8::from_fn(64, 16, |x, _| if x < 32 { [200, 40, 40, 255] } else { [40, 40, 200, 255] });
+        let bytes = stereo::encode_mpo(&EncodeImage::rgba8(&pair), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+        let hash = crate::store::content_hash(&bytes);
+        let job = WireJob {
+            cache_generation: 0,
+            source_identity: None,
+            level: SourceLevel::Thumb,
+            origin: Source::File { path: crate::store::original_path(&hash, "pair.mpo") },
+            max_edge: 512,
+            raw: false,
+            relative_wb: false,
+            legacy_relative_wb: false,
+            as_shot_temp: 6500.0,
+            as_shot_tint: 0.0,
+            lens: None,
+            native_long: None,
+            settings: Arc::new(DevelopSettings::default()),
+            max_w: 32,
+            max_h: 32,
+            draft: false,
+            apply_crop: true,
+            thumb: None,
+            thumb_cached: false,
+            stages: Some("Main".into()),
+            overlay: (0, 0.0),
+            window: None,
+            stereo: true,
+        };
+        let mut core = WorkerCore::default();
+        let r = core.render(&job, Some(&bytes)).unwrap();
+        assert_eq!((r.image.width, r.image.height), (64, 16), "two 32×16 eyes side by side");
+        let (l, rr) = (r.image.get(8, 8), r.image.get(56, 8));
+        assert!(l[0] > l[2] && rr[2] > rr[0], "left eye red, right eye blue: {l:?} {rr:?}");
+        // without the stereo view: the photo, its left eye
+        let r = core.render(&WireJob { stereo: false, ..job }, Some(&bytes)).unwrap();
+        assert_eq!(r.image.width, 32);
+        assert!(r.image.get(8, 8)[0] > r.image.get(8, 8)[2]);
+    }
+
+    #[test]
     fn worker_reads_originals_once() {
         let bytes = crate::store::png_bytes(64, 48);
         let hash = crate::store::content_hash(&bytes);
@@ -485,6 +540,7 @@ mod tests {
             stages: Some("Main".into()),
             overlay: (0, 0.0),
             window: None,
+            stereo: false,
         };
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&job).as_deref(), Some(hash.as_str()));

@@ -8,9 +8,9 @@ use lightcraft_catalog::{Eye, MediaKind, Meta, Stereo};
 use lightcraft_codecs::stereo::StereoLayout;
 use lightcraft_color::cct::xy_to_temp_tint;
 use lightcraft_geom::Orientation;
-use lightcraft_pipeline::SourceInfo;
+use lightcraft_pipeline::{SourceInfo, StereoEyes};
 use lightcraft_raster::Rgb32f;
-use lightcraft_raster::resample::{Filter, fit};
+use lightcraft_raster::resample::{Filter, fit, resize};
 
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, PairLoader, PreviewLoader, ProbeInfo};
 
@@ -139,12 +139,16 @@ pub fn stereo_layout(name: &str, bytes: &[u8]) -> Option<StereoLayout> {
 
 /// What a file's headers say about stereo, as the catalog records it ([`Stereo`]).
 pub fn stereo_of(name: &str, bytes: &[u8]) -> Stereo {
+    stereo_kind(stereo_layout(name, bytes).as_ref())
+}
+
+fn stereo_kind(layout: Option<&StereoLayout>) -> Stereo {
     use lightcraft_codecs::stereo::Eye as E;
     let eye = |e: E| match e {
         E::Left => Eye::Left,
         E::Right => Eye::Right,
     };
-    match stereo_layout(name, bytes) {
+    match layout.cloned() {
         None => Stereo::Mono,
         Some(StereoLayout::Heif { .. }) => Stereo::Heif,
         Some(StereoLayout::Mpo { .. }) => Stereo::Mpo,
@@ -153,6 +157,25 @@ pub fn stereo_of(name: &str, bytes: &[u8]) -> Stereo {
         Some(StereoLayout::Rows { first }) => Stereo::Rows { first: eye(first) },
         Some(StereoLayout::Anaglyph { red }) => Stereo::Anaglyph { red: eye(red) },
     }
+}
+
+/// One eye's size and orientation in a stereo file whose photo is its left eye, from its headers
+/// (`packed`: the picture's stored size and orientation): an MPO's left image, a packed picture's
+/// share of it, a whole anaglyph. `None` for a HEIF pair, whose photo is its primary image.
+fn stereo_eye(bytes: &[u8], layout: &StereoLayout, packed: (u32, u32, u16)) -> Option<(u32, u32, u16)> {
+    let (w, h, orientation) = packed;
+    let whole = |n: u32, squeezed: bool| if squeezed { n.checked_mul(2) } else { Some(n) };
+    Some(match layout {
+        StereoLayout::Heif { .. } => return None,
+        StereoLayout::Mpo { left, .. } => {
+            let eye = lightcraft_codecs::read_header(bytes.get(left.clone())?).ok()?;
+            (eye.width, eye.height, eye.orientation)
+        }
+        StereoLayout::SideBySide { gap, squeezed, .. } => (whole(w.checked_sub(*gap)? / 2, *squeezed)?, h, orientation),
+        StereoLayout::OverUnder { gap, squeezed, .. } => (w, whole(h.checked_sub(*gap)? / 2, *squeezed)?, orientation),
+        StereoLayout::Rows { .. } => (w, h / 2 * 2, orientation),
+        StereoLayout::Anaglyph { .. } => packed,
+    })
 }
 
 /// Probe a file's bytes: kind, dimensions (oriented), metadata. No pixel data is decompressed:
@@ -164,7 +187,8 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);
     // HEIF, MPO, JPS and PNG say so in their headers; any other format is checked (and answered) at once
-    let stereo = Some(stereo_of(name, bytes));
+    let layout = stereo_layout(name, bytes);
+    let stereo = Some(stereo_kind(layout.as_ref()));
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = match lightcraft_raw::probe_info(bytes).map_err(|e| preview_reason(bytes, e)) {
             Ok(r) => r,
@@ -220,8 +244,10 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     // headers only (issue #367: decoding the pixels was nearly all of an import's CPU time)
     let header = lightcraft_codecs::read_header(bytes).map_err(|e| e.to_string())?;
-    let o = Orientation::from_exif(header.orientation);
-    let (mut w, mut h) = (header.width, header.height);
+    // a stereo pair is described by its left eye, the photo it is edited as (a HEIF's by its primary image)
+    let packed = (header.width, header.height, header.orientation);
+    let (mut w, mut h, orientation) = layout.as_ref().and_then(|l| stereo_eye(bytes, l, packed)).unwrap_or(packed);
+    let o = Orientation::from_exif(orientation);
     if o.swaps_axes() {
         std::mem::swap(&mut w, &mut h);
     }
@@ -396,20 +422,32 @@ pub fn bin_factor(raw: &lightcraft_raw::RawImage, max_edge: usize) -> Option<usi
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    load_named("", bytes, max_edge)
+}
+
+/// [`load_bytes`] for the file `name`, whose extension tells a JPS without a stereo descriptor
+/// from an ordinary JPEG. A stereo file also gives its eyes ([`SourceInfo::stereo`]), each no
+/// larger than `max_edge`.
+pub fn load_named(name: &str, bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(|_| load_bytes_now(name, std::borrow::Cow::Borrowed(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
+    load_vec_named("", bytes, max_edge)
+}
+
+/// [`load_vec`] for the file `name` (see [`load_named`]).
+pub fn load_vec_named(name: &str, bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| load_bytes_now(name, std::borrow::Cow::Owned(bytes), max_edge, None).map(|(img, _, info)| (img, info)))
 }
 
 /// [`load_vec`] that also develops the photo's cached denoised picture (`spec`) from the same decode: the plain
 /// picture, the denoised one (`None` when it cannot be read or does not fit this raw: the plain one is then all
 /// there is) and the source facts. Both pictures are the same size.
 pub fn load_vec_pair(bytes: Vec<u8>, max_edge: usize, spec: &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec)))
+    rayon::scope(move |_| load_bytes_now("", std::borrow::Cow::Owned(bytes), max_edge, Some(spec)))
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -435,6 +473,7 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
 }
 
 fn load_bytes_now(
+    name: &str,
     bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
@@ -558,14 +597,36 @@ fn load_bytes_now(
                 local_tone,
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
+                stereo: None,
             },
         ));
     }
+    let working = |d: &lightcraft_codecs::Decoded| {
+        let img = d.to_working();
+        let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
+        img.into_oriented(Orientation::from_exif(d.orientation))
+    };
+    // a stereo photo's eyes come with its picture: the left eye, or a HEIF's primary image (eyes
+    // that can't be read leave the picture as it is)
+    if let Some(layout) = stereo_layout(name, &bytes)
+        && let Ok((l, r)) = lightcraft_codecs::stereo::decode_pair(&bytes, &layout, fit_box(max_edge))
+    {
+        let native_long = l.source_width.max(l.source_height) as usize;
+        let (left, right) = (working(&l), working(&r));
+        let right =
+            if (right.width, right.height) == (left.width, left.height) { right } else { resize(&right, left.width, left.height, Filter::Mitchell) };
+        let (picture, left) = match layout {
+            StereoLayout::Heif { .. } => {
+                (working(&lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?), Some(Arc::new(left)))
+            }
+            _ => (left, None),
+        };
+        let stereo = StereoEyes { left, right: Arc::new(right), native_long };
+        return Ok((picture, None, SourceInfo { stereo: Some(stereo), ..SourceInfo::default() }));
+    }
     let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
-    let img = d.to_working();
-    let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default()))
+    Ok((working(&d), None, SourceInfo::default()))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from
@@ -1095,7 +1156,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec(bytes, max_edge);
+        let r = load_vec_named(path, bytes, max_edge);
         // the file, the samples and the intermediate images are gone: give their pages back
         crate::memory::release();
         r

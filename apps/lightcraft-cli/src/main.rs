@@ -52,8 +52,9 @@ USAGE:
         --library DIR     headless: open (or create) a persistent LightCraft library; edits are saved
         --compact         list only the helper tools (every command stays reachable via run_command)
   lightcraft-cli render <IN> -o <OUT> [OPTIONS]
-      Develop one file and export it (.jpg, .png, .tif, .webp, .avif, .jxl, .psd or .dng by extension) with the
-      same encoder as the app's Export dialog. Options:
+      Develop one file and export it (.jpg, .png, .tif, .webp, .avif, .jxl, .psd or .dng by extension; a stereo
+      photo also .mpo or .jps, and both eyes side by side with --opt bothEyes=true) with the same encoder
+      as the app's Export dialog. Options:
         --set CONTROL=VALUE  set a develop slider, repeatable (e.g. --set light.exposure=0.5)
         --settings FILE      merge a partial develop-settings JSON file, or apply the one preset of a
                              .lcpreset (preset.export) or XMP preset
@@ -736,7 +737,7 @@ fn render(args: &[String]) -> Result<(), String> {
     if p.get("format").is_none() {
         let ext = Path::new(&output).extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
         o.format = ExportFormat::parse(&ext)
-            .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng or --opt format=…)"))?;
+            .ok_or_else(|| format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .dng .mpo .jps or --opt format=…)"))?;
     }
     // Add to Apple Photos: refused before anything is written when it can't be done
     let after = s.after_export(&o)?;
