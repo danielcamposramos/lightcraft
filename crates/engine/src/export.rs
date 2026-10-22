@@ -1423,7 +1423,7 @@ fn encode_finished(img: &Rgba8, o: &ExportOptions, meta: Option<&Metadata>, ster
     .then(|| img.data.iter().flat_map(|p| p.iter().take(3).copied()).collect());
     let e = match &rgb {
         Some(data) => EncodeImage::new(img.width as u32, img.height as u32, 3, Samples::U8(data)),
-        None => EncodeImage::rgba8(&img),
+        None => EncodeImage::rgba8(img),
     };
     let r = match o.format {
         ExportFormat::Jpeg => {
