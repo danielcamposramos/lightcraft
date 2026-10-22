@@ -13,6 +13,8 @@
 //!
 //! Entry points: [`Server::serve_stdio`] (process stdin), [`Server::serve`] (caller-managed
 //! streams), and [`Server::handle_line`] (one message).
+// the export tool's schema is one `json!` literal; the stereo option made it deeper than the default limit
+#![recursion_limit = "256"]
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
